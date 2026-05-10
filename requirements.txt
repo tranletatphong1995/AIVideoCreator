@@ -1,0 +1,25 @@
+# === AIVideoCreator - Dependencies ===
+# UI Framework
+PyQt5>=5.15.0
+
+# Ollama Python SDK
+ollama>=0.4.0
+
+# Playwright for headless browser rendering
+playwright>=1.40.0
+
+# Video processing
+moviepy>=2.0.0
+Pillow>=10.0.0
+
+# Data validation
+pydantic>=2.0.0
+
+# HTTP requests
+requests>=2.31.0
+
+# VieNeu TTS SDK (Vietnamese Text-to-Speech)
+vieneu
+
+# Build tool
+pyinstaller>=6.0.0

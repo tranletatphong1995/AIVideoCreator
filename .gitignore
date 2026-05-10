@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+
+# Local runtime output
+output/
+output_smoke/
+output_transition_smoke/
+quality_smoke/
+temp_audio/
+temp_merged/
+temp_slides/
+
+# Build artifacts
+build/
+dist/
+*.spec
+
+# Logs and local config
+*.log
+.env
+.env.*
+
+# Fooocus API local runtime
+engines/Fooocus-API/.git/
+engines/Fooocus-API/.venv/
+engines/Fooocus-API/outputs/
+engines/Fooocus-API/presets/
+
+# Large AI model files
+*.safetensors
+*.ckpt
+*.pth
+*.pt
+*.onnx
+*.gguf
+*.bin
+*.engine
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
