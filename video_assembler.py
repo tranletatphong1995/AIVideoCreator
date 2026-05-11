@@ -35,6 +35,9 @@ class VideoAssembler:
     """Ghép video slides + audio thành video hoàn chỉnh."""
 
     TEMP_MERGE_DIR = "temp_merged"
+    FAST_FPS = 30
+    FINAL_FPS = 60
+    MOTION_OVERSCAN = 1.06
 
     def __init__(self, signals=None):
         self.signals = signals
@@ -81,6 +84,9 @@ class VideoAssembler:
             "-pix_fmt", "yuv420p",
             "-movflags", "+faststart",
         ]
+
+    def _render_fps(self, fast_mode: bool = False) -> int:
+        return self.FAST_FPS if fast_mode else self.FINAL_FPS
 
     # ──────────────────────────────────────
     # Ghép 1 slide video + audio
@@ -422,8 +428,7 @@ class VideoAssembler:
             return part_path
 
         self._log(f"📎 Dựng cảnh ảnh {slide_num}/{total_parts}...")
-        self._compose_image_background_frame(image_path, frame_path, resolution)
-        if self._write_image_part(frame_path, audio_path, part_path, resolution, subtitle_cues, fast_mode=fast_mode):
+        if self._write_image_part(image_path, audio_path, part_path, resolution, subtitle_cues, fast_mode=fast_mode):
             self._write_image_part_cache(part_path, image_path, audio_path, subtitle_cues, resolution, fast_mode)
             return part_path
         return None
@@ -453,7 +458,7 @@ class VideoAssembler:
                 output_path,
                 codec="libx264",
                 audio_codec="aac",
-                fps=30,
+                fps=self._render_fps(fast_mode),
                 threads=4,
                 preset="veryfast" if fast_mode else "slow",
                 bitrate=self._bitrate_for_size(final.size, fast_mode=fast_mode),
@@ -503,11 +508,13 @@ class VideoAssembler:
                 cue = cue.model_dump()
             cue_payload.append(cue)
         return {
-            "version": 3,
+            "version": 5,
             "image": stamp(image_path),
             "audio": stamp(audio_path),
             "resolution": list(resolution),
             "fast_mode": bool(fast_mode),
+            "fps": self._render_fps(fast_mode),
+            "motion_overscan": self.MOTION_OVERSCAN,
             "subtitle_cues": cue_payload,
         }
 
@@ -551,7 +558,7 @@ class VideoAssembler:
 
     def _write_image_part(
         self,
-        frame_path: str,
+        image_path: str,
         audio_path: str,
         output_path: str,
         resolution: Tuple[int, int],
@@ -565,7 +572,8 @@ class VideoAssembler:
         try:
             audio_clip = AudioFileClip(audio_path)
             duration = audio_clip.duration
-            base_clip = self._animated_image_clip(frame_path, duration, resolution, output_path)
+            fps = self._render_fps(fast_mode)
+            base_clip = self._animated_image_clip(image_path, duration, resolution, output_path, fast_mode=fast_mode)
             video_layers = [base_clip]
             normalized_cues = self._normalize_subtitle_cues(subtitle_cues or [], duration)
 
@@ -580,10 +588,10 @@ class VideoAssembler:
                     ImageClip(overlay_path, transparent=True)
                     .with_start(cue["start"])
                     .with_duration(cue_duration)
-                    .with_fps(30)
+                    .with_fps(fps)
                 )
-                fade_duration = min(0.14, cue_duration / 4)
-                if fade_duration > 0.03:
+                fade_duration = min(0.28, cue_duration / 3)
+                if fade_duration > 0.06:
                     overlay_clip = overlay_clip.with_effects([
                         vfx.FadeIn(fade_duration),
                         vfx.FadeOut(fade_duration),
@@ -596,7 +604,7 @@ class VideoAssembler:
                 output_path,
                 codec="libx264",
                 audio_codec="aac",
-                fps=30,
+                fps=fps,
                 logger=None,
                 threads=4,
                 preset="veryfast" if fast_mode else "medium",
@@ -618,10 +626,11 @@ class VideoAssembler:
 
     def _animated_image_clip(
         self,
-        frame_path: str,
+        image_path: str,
         duration: float,
         resolution: Tuple[int, int],
         output_path: str,
+        fast_mode: bool = False,
     ):
         width, height = resolution
         slide_num = 1
@@ -629,21 +638,28 @@ class VideoAssembler:
         if match:
             slide_num = int(match.group(1))
 
-        # Alternate slow zoom-in and zoom-out profiles. Pan stays subtle so
-        # the motion feels alive without creating frame-to-frame jitter.
+        # Alternate slow zoom-in and zoom-out profiles. The frame renderer below
+        # uses sub-pixel affine sampling so the drift does not snap between
+        # integer crop offsets.
         profiles = [
-            (1.000, 1.040, (0.48, 0.50), (0.54, 0.47)),  # zoom in, drift up-right
-            (1.040, 1.004, (0.54, 0.48), (0.47, 0.53)),  # zoom out, drift down-left
-            (1.000, 1.034, (0.50, 0.53), (0.50, 0.47)),  # zoom in, drift upward
-            (1.036, 1.004, (0.47, 0.48), (0.54, 0.52)),  # zoom out, drift down-right
-            (1.000, 1.038, (0.52, 0.47), (0.48, 0.53)),  # zoom in, drift down-left
-            (1.034, 1.004, (0.48, 0.54), (0.53, 0.47)),  # zoom out, drift up-right
+            (1.000, 1.026, (0.49, 0.50), (0.53, 0.48)),  # zoom in, drift up-right
+            (1.026, 1.004, (0.53, 0.49), (0.48, 0.52)),  # zoom out, drift down-left
+            (1.000, 1.022, (0.50, 0.52), (0.50, 0.48)),  # zoom in, drift upward
+            (1.024, 1.004, (0.48, 0.49), (0.53, 0.52)),  # zoom out, drift down-right
+            (1.000, 1.024, (0.52, 0.48), (0.48, 0.52)),  # zoom in, drift down-left
+            (1.022, 1.004, (0.49, 0.53), (0.52, 0.48)),  # zoom out, drift up-right
         ]
         start_scale, end_scale, start_anchor, end_anchor = profiles[(slide_num - 1) % len(profiles)]
         duration = max(0.1, float(duration or 0.1))
-        source = Image.open(frame_path).convert("RGB")
+        source = Image.open(image_path).convert("RGB")
         source.load()
-        resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.BICUBIC)
+        src_w, src_h = source.size
+        cover_scale = max(width / src_w, height / src_h)
+        overscan = self.MOTION_OVERSCAN
+        transform_affine = getattr(getattr(Image, "Transform", Image), "AFFINE", Image.AFFINE)
+        resample = getattr(getattr(Image, "Resampling", Image), "BICUBIC", Image.BICUBIC)
+        fps = self._render_fps(fast_mode)
+        gradient = self._lower_readability_gradient(resolution, top_ratio=0.56, alpha_start=18, alpha_end=132)
 
         def progress(t):
             raw = min(1.0, max(0.0, float(t) / duration))
@@ -652,22 +668,43 @@ class VideoAssembler:
         def make_frame(t):
             p = progress(t)
             scale = start_scale + (end_scale - start_scale) * p
-            target_width = max(width, self._even_int(width * scale))
-            target_height = max(height, self._even_int(height * scale))
-            extra_x = max(0.0, target_width - width)
-            extra_y = max(0.0, target_height - height)
             anchor_x = start_anchor[0] + (end_anchor[0] - start_anchor[0]) * p
             anchor_y = start_anchor[1] + (end_anchor[1] - start_anchor[1]) * p
-            left = min(max(0, self._even_int(extra_x * anchor_x)), max(0, target_width - width))
-            top = min(max(0, self._even_int(extra_y * anchor_y)), max(0, target_height - height))
-            resized = source.resize((target_width, target_height), resample)
-            frame = resized.crop((left, top, left + width, top + height))
-            return frame
+            display_scale = cover_scale * overscan * scale
+            crop_width = min(src_w, width / display_scale)
+            crop_height = min(src_h, height / display_scale)
+            extra_x = max(0.0, src_w - crop_width)
+            extra_y = max(0.0, src_h - crop_height)
+            left = max(0.0, min(extra_x * anchor_x, extra_x))
+            top = max(0.0, min(extra_y * anchor_y, extra_y))
+            frame = source.transform(
+                (width, height),
+                transform_affine,
+                (1.0 / display_scale, 0.0, left, 0.0, 1.0 / display_scale, top),
+                resample=resample,
+            )
+            return Image.alpha_composite(frame.convert("RGBA"), gradient).convert("RGB")
 
         return VideoClip(
             frame_function=lambda t: np.array(make_frame(t)),
             duration=duration,
-        ).with_fps(30)
+        ).with_fps(fps)
+
+    def _lower_readability_gradient(
+        self,
+        resolution: Tuple[int, int],
+        top_ratio: float = 0.56,
+        alpha_start: int = 18,
+        alpha_end: int = 132,
+    ):
+        width, height = resolution
+        overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        overlay_draw = ImageDraw.Draw(overlay)
+        gradient_top = int(height * top_ratio)
+        for y in range(gradient_top, height):
+            alpha = int(alpha_start + alpha_end * ((y - gradient_top) / max(1, height - gradient_top)) ** 1.35)
+            overlay_draw.line([(0, y), (width, y)], fill=(0, 0, 0, alpha))
+        return overlay
 
     @staticmethod
     def _even_int(value: float) -> int:
@@ -683,12 +720,7 @@ class VideoAssembler:
         source = Image.open(image_path).convert("RGB")
         canvas = self._cover_image(source, width, height)
 
-        overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-        overlay_draw = ImageDraw.Draw(overlay)
-        gradient_top = int(height * 0.56)
-        for y in range(gradient_top, height):
-            alpha = int(18 + 132 * ((y - gradient_top) / max(1, height - gradient_top)) ** 1.35)
-            overlay_draw.line([(0, y), (width, y)], fill=(0, 0, 0, alpha))
+        overlay = self._lower_readability_gradient(resolution, top_ratio=0.56, alpha_start=18, alpha_end=132)
         canvas = Image.alpha_composite(canvas.convert("RGBA"), overlay)
         canvas.convert("RGB").save(output_path, quality=96)
 
