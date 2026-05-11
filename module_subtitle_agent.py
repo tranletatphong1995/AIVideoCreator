@@ -81,6 +81,13 @@ class SubtitleAgent:
                 except Exception:
                     pass
 
+    def fallback_for_slide(self, slide, audio_path: str) -> List[SubtitleCue]:
+        """Create deterministic subtitle cues without calling an LLM."""
+        narration = str(getattr(slide, "narration", "") or "").strip()
+        if not narration:
+            return []
+        return self._fallback_cues(narration, self._audio_duration(audio_path))
+
     def _cache_meta(self, slide_count: int, durations: List[float]) -> dict:
         rounded = [round(float(duration), 2) for duration in durations]
         return {

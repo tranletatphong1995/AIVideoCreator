@@ -244,3 +244,16 @@ class Ima2ImageAgent:
                 image_paths[idx] = path
 
         return [path for path in image_paths if path]
+
+    def generate_image_for_slide(self, slide, slide_num: int, total_slides: int = 1, resume: bool = False) -> str:
+        """Generate or reuse one slide image."""
+        output_path = os.path.join(self.IMAGE_DIR, f"ima2_slide_{slide_num}.png")
+        if resume and self._is_valid_file(output_path):
+            self._log(f"   Reusing ima2 image {slide_num}: {output_path}")
+            return output_path
+
+        title = str(getattr(slide, "title", f"Scene {slide_num}"))
+        self._log(f"   ima2 image {slide_num}/{total_slides}: {title[:80]}")
+        result_path = self._generate_one(slide, output_path)
+        self._log(f"   Saved image: {output_path}")
+        return result_path

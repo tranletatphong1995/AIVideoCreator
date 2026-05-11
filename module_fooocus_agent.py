@@ -209,3 +209,17 @@ class FooocusAgent:
             self._log(f"   ✅ Đã lưu ảnh: {output_path}")
 
         return image_paths
+
+    def generate_image_for_slide(self, slide, slide_num: int, total_slides: int = 1, resume: bool = False) -> str:
+        """Generate or reuse one slide image."""
+        self._check_server()
+        output_path = os.path.join(self.IMAGE_DIR, f"fooocus_slide_{slide_num}.png")
+        if resume and self._is_valid_file(output_path):
+            self._log(f"   🔁 Dùng lại ảnh Fooocus cảnh {slide_num}: {output_path}")
+            return output_path
+
+        title = str(getattr(slide, "title", f"Cảnh {slide_num}"))
+        self._log(f"   🎨 Fooocus cảnh {slide_num}/{total_slides}: {title[:80]}")
+        result_path = self._generate_one(slide, output_path)
+        self._log(f"   ✅ Đã lưu ảnh: {output_path}")
+        return result_path

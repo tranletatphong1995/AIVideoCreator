@@ -238,6 +238,42 @@ class AudioAgent:
         self._log(f"✅ Đã tạo xong {len(audio_files)} file audio")
         return audio_files
 
+    def generate_audio_for_slide(
+        self,
+        text: str,
+        slide_num: int,
+        total_slides: int = 1,
+        voice_id: Optional[str] = None,
+        resume: bool = False,
+    ) -> str:
+        """Create or reuse one slide narration file."""
+        output_path = os.path.join(self.AUDIO_DIR, f"audio_{slide_num}.wav")
+        if resume and self._is_valid_file(output_path):
+            self._log(f"   🔁 Dùng lại audio slide {slide_num}: {output_path}")
+            return output_path
+
+        if not self._ensure_vieneu_installed():
+            raise RuntimeError("Không thể cài đặt VieNeu-TTS. Hãy cài thủ công: pip install vieneu")
+
+        if voice_id:
+            try:
+                self.tts.get_preset_voice(voice_id)
+                self._log(f"🎤 Đang dùng giọng: {voice_id}")
+            except Exception as e:
+                self._log(f"⚠️ Không tìm thấy giọng '{voice_id}', dùng giọng mặc định: {e}")
+
+        self._log(f"🔊 Tạo audio slide {slide_num}/{total_slides}...")
+        self._log(f"   📝 \"{text[:80]}{'...' if len(text) > 80 else ''}\"")
+        try:
+            self._run_tts_worker(text, output_path, voice_id=voice_id)
+            self._log(f"   ✅ Đã lưu: {output_path}")
+            return output_path
+        except Exception as e:
+            self._log(f"   ❌ Lỗi TTS slide {slide_num}: {e}")
+            silence_path = self._create_silence(slide_num, duration_sec=5)
+            self._log(f"   🔇 Đã tạo file im lặng thay thế: {silence_path}")
+            return silence_path
+
     def _create_silence(self, slide_num: int, duration_sec: float = 5.0) -> str:
         """Tạo file WAV im lặng (fallback khi TTS lỗi)."""
         import struct

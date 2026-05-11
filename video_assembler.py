@@ -6,6 +6,7 @@ Module 3: Video Assembler
 """
 
 import os
+import json
 import re
 import shutil
 import sys
@@ -50,7 +51,7 @@ class VideoAssembler:
         return concatenate_videoclips(clips, method="compose")
 
 
-    def _bitrate_for_size(self, size, intermediate: bool = False) -> str:
+    def _bitrate_for_size(self, size, intermediate: bool = False, fast_mode: bool = False) -> str:
         """Pick a sane bitrate from output pixel count to avoid soft text."""
         width, height = size
         pixels = width * height
@@ -68,11 +69,13 @@ class VideoAssembler:
             mbps = 8
         if intermediate:
             mbps = int(mbps * 1.25)
+        if fast_mode:
+            mbps = max(4, int(mbps * 0.65))
         return f"{mbps}M"
 
-    def _ffmpeg_quality_params(self) -> list:
+    def _ffmpeg_quality_params(self, fast_mode: bool = False) -> list:
         return [
-            "-crf", "14",
+            "-crf", "22" if fast_mode else "14",
             "-pix_fmt", "yuv420p",
             "-movflags", "+faststart",
         ]
@@ -80,7 +83,7 @@ class VideoAssembler:
     # ──────────────────────────────────────
     # Ghép 1 slide video + audio
     # ──────────────────────────────────────
-    def _merge_single(self, video_path: str, audio_path: str, output_path: str) -> bool:
+    def _merge_single(self, video_path: str, audio_path: str, output_path: str, fast_mode: bool = False) -> bool:
         """
         Ghép 1 file video + 1 file audio.
         Điều chỉnh video duration khớp audio duration.
@@ -126,9 +129,9 @@ class VideoAssembler:
                 fps=30,
                 logger=None,
                 threads=4,
-                preset="medium",
-                bitrate=self._bitrate_for_size(final_clip.size, intermediate=True),
-                ffmpeg_params=self._ffmpeg_quality_params()
+                preset="veryfast" if fast_mode else "medium",
+                bitrate=self._bitrate_for_size(final_clip.size, intermediate=True, fast_mode=fast_mode),
+                ffmpeg_params=self._ffmpeg_quality_params(fast_mode=fast_mode)
             )
 
             self._log(f"   ✅ Đã ghép: {output_path} ({audio_duration:.1f}s)")
@@ -160,7 +163,7 @@ class VideoAssembler:
     # Tạo video từ audio + ảnh tĩnh (fallback)
     # ──────────────────────────────────────
     def _create_from_audio_only(self, audio_path: str, output_path: str, 
-                                 bg_color: tuple = (26, 26, 46)) -> bool:
+                                 bg_color: tuple = (26, 26, 46), fast_mode: bool = False) -> bool:
         """Tạo video với background color + audio (khi không có video clip)."""
         audio_clip = None
         color_clip = None
@@ -182,9 +185,9 @@ class VideoAssembler:
                 fps=30,
                 logger=None,
                 threads=4,
-                preset="medium",
-                bitrate=self._bitrate_for_size(final_clip.size, intermediate=True),
-                ffmpeg_params=self._ffmpeg_quality_params()
+                preset="veryfast" if fast_mode else "medium",
+                bitrate=self._bitrate_for_size(final_clip.size, intermediate=True, fast_mode=fast_mode),
+                ffmpeg_params=self._ffmpeg_quality_params(fast_mode=fast_mode)
             )
             return True
 
@@ -205,7 +208,7 @@ class VideoAssembler:
     # ──────────────────────────────────────
     def assemble(self, video_clips: List[str], audio_files: List[str], 
                  output_path: str, bg_music_path: Optional[str] = None,
-                 bg_music_volume: float = 0.2) -> str:
+                 bg_music_volume: float = 0.2, fast_mode: bool = False) -> str:
         """
         Ghép tất cả slides thành 1 video hoàn chỉnh.
         
@@ -237,20 +240,20 @@ class VideoAssembler:
 
             if video_path and audio_path and os.path.exists(video_path) and os.path.exists(audio_path):
                 # Có cả video lẫn audio → ghép
-                success = self._merge_single(video_path, audio_path, merged_path)
+                success = self._merge_single(video_path, audio_path, merged_path, fast_mode=fast_mode)
             elif audio_path and os.path.exists(audio_path):
                 # Chỉ có audio → tạo video với background
                 self._log(f"   ⚠️ Không có video cho slide {slide_num}, tạo từ audio...")
-                success = self._create_from_audio_only(audio_path, merged_path)
+                success = self._create_from_audio_only(audio_path, merged_path, fast_mode=fast_mode)
             elif video_path and os.path.exists(video_path):
                 # Chỉ có video → copy nguyên
                 self._log(f"   ⚠️ Không có audio cho slide {slide_num}")
                 try:
                     clip = VideoFileClip(video_path)
                     clip.write_videofile(merged_path, codec="libx264", audio=False, 
-                                       fps=30, logger=None, preset="medium",
-                                       bitrate=self._bitrate_for_size(clip.size, intermediate=True),
-                                       ffmpeg_params=self._ffmpeg_quality_params())
+                                       fps=30, logger=None, preset="veryfast" if fast_mode else "medium",
+                                       bitrate=self._bitrate_for_size(clip.size, intermediate=True, fast_mode=fast_mode),
+                                       ffmpeg_params=self._ffmpeg_quality_params(fast_mode=fast_mode))
                     clip.close()
                     success = True
                 except Exception as e:
@@ -288,9 +291,9 @@ class VideoAssembler:
                 audio_codec="aac",
                 fps=30,
                 threads=4,
-                preset="slow",
-                bitrate=self._bitrate_for_size(final.size),
-                ffmpeg_params=self._ffmpeg_quality_params(),
+                preset="veryfast" if fast_mode else "slow",
+                bitrate=self._bitrate_for_size(final.size, fast_mode=fast_mode),
+                ffmpeg_params=self._ffmpeg_quality_params(fast_mode=fast_mode),
                 logger=None
             )
 
@@ -330,6 +333,8 @@ class VideoAssembler:
         resolution: Tuple[int, int] = (1280, 720),
         bg_music_path: Optional[str] = None,
         bg_music_volume: float = 0.2,
+        fast_mode: bool = False,
+        resume: bool = False,
     ) -> str:
         """
         Dựng video chỉ gồm ảnh minh họa, subtitle timed cues và âm thanh.
@@ -362,11 +367,73 @@ class VideoAssembler:
                 self._log(f"   ⚠️ Không tìm thấy audio cảnh {slide_num}: {audio_path}")
                 continue
 
-            self._log(f"📎 Dựng cảnh ảnh {slide_num}/{num_parts}...")
-            self._compose_image_background_frame(image_path, frame_path, resolution)
-            if self._write_image_part(frame_path, audio_path, part_path, resolution, subtitle_cues):
-                merged_parts.append(part_path)
+            part = self.render_image_story_part(
+                slide_num,
+                image_path,
+                audio_path,
+                subtitle_cues,
+                resolution,
+                total_parts=num_parts,
+                part_path=part_path,
+                frame_path=frame_path,
+                fast_mode=fast_mode,
+                resume=resume,
+            )
+            if part:
+                merged_parts.append(part)
 
+        if not merged_parts:
+            raise RuntimeError("Không có phần video ảnh minh họa nào được tạo thành công.")
+
+        return self.finalize_image_story_parts(
+            merged_parts,
+            output_path,
+            bg_music_path=bg_music_path,
+            bg_music_volume=bg_music_volume,
+            fast_mode=fast_mode,
+        )
+
+    def render_image_story_part(
+        self,
+        slide_num: int,
+        image_path: str,
+        audio_path: str,
+        subtitle_cues: Optional[list],
+        resolution: Tuple[int, int],
+        total_parts: int = 1,
+        part_path: Optional[str] = None,
+        frame_path: Optional[str] = None,
+        fast_mode: bool = False,
+        resume: bool = False,
+    ) -> Optional[str]:
+        if not os.path.exists(image_path):
+            self._log(f"   ⚠️ Không tìm thấy ảnh cảnh {slide_num}: {image_path}")
+            return None
+        if not os.path.exists(audio_path):
+            self._log(f"   ⚠️ Không tìm thấy audio cảnh {slide_num}: {audio_path}")
+            return None
+
+        part_path = part_path or os.path.join(self.TEMP_MERGE_DIR, f"image_story_part_{slide_num}.mp4")
+        frame_path = frame_path or os.path.join(self.TEMP_MERGE_DIR, f"image_story_bg_{slide_num}.png")
+        if resume and self._is_cached_image_part_current(part_path, image_path, audio_path, subtitle_cues, resolution, fast_mode):
+            self._log(f"   🔁 Dùng lại part video cảnh {slide_num}: {part_path}")
+            return part_path
+
+        self._log(f"📎 Dựng cảnh ảnh {slide_num}/{total_parts}...")
+        self._compose_image_background_frame(image_path, frame_path, resolution)
+        if self._write_image_part(frame_path, audio_path, part_path, resolution, subtitle_cues, fast_mode=fast_mode):
+            self._write_image_part_cache(part_path, image_path, audio_path, subtitle_cues, resolution, fast_mode)
+            return part_path
+        return None
+
+    def finalize_image_story_parts(
+        self,
+        merged_parts: List[str],
+        output_path: str,
+        bg_music_path: Optional[str] = None,
+        bg_music_volume: float = 0.2,
+        fast_mode: bool = False,
+    ) -> str:
         if not merged_parts:
             raise RuntimeError("Không có phần video ảnh minh họa nào được tạo thành công.")
 
@@ -386,9 +453,9 @@ class VideoAssembler:
                 audio_codec="aac",
                 fps=30,
                 threads=4,
-                preset="slow",
-                bitrate=self._bitrate_for_size(final.size),
-                ffmpeg_params=self._ffmpeg_quality_params(),
+                preset="veryfast" if fast_mode else "slow",
+                bitrate=self._bitrate_for_size(final.size, fast_mode=fast_mode),
+                ffmpeg_params=self._ffmpeg_quality_params(fast_mode=fast_mode),
                 logger=None,
             )
 
@@ -398,7 +465,6 @@ class VideoAssembler:
             self._log(f"   ⏱️ Thời lượng: {duration:.1f} giây")
             self._log(f"   💾 Kích thước: {file_size:.1f} MB")
             return output_path
-
         finally:
             if final:
                 try:
@@ -411,6 +477,76 @@ class VideoAssembler:
                 except Exception:
                     pass
 
+    def _image_part_cache_path(self, part_path: str) -> str:
+        return f"{part_path}.json"
+
+    def _image_part_cache_meta(
+        self,
+        image_path: str,
+        audio_path: str,
+        subtitle_cues: Optional[list],
+        resolution: Tuple[int, int],
+        fast_mode: bool,
+    ) -> dict:
+        def stamp(path: str) -> dict:
+            return {
+                "path": os.path.abspath(path),
+                "mtime": round(os.path.getmtime(path), 3),
+                "size": os.path.getsize(path),
+            }
+
+        cue_payload = []
+        for cue in subtitle_cues or []:
+            if hasattr(cue, "model_dump"):
+                cue = cue.model_dump()
+            cue_payload.append(cue)
+        return {
+            "version": 1,
+            "image": stamp(image_path),
+            "audio": stamp(audio_path),
+            "resolution": list(resolution),
+            "fast_mode": bool(fast_mode),
+            "subtitle_cues": cue_payload,
+        }
+
+    def _is_cached_image_part_current(
+        self,
+        part_path: str,
+        image_path: str,
+        audio_path: str,
+        subtitle_cues: Optional[list],
+        resolution: Tuple[int, int],
+        fast_mode: bool,
+    ) -> bool:
+        if not os.path.exists(part_path) or os.path.getsize(part_path) < 1024:
+            return False
+        cache_path = self._image_part_cache_path(part_path)
+        if not os.path.exists(cache_path):
+            return False
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                cached = json.load(f)
+            return cached == self._image_part_cache_meta(image_path, audio_path, subtitle_cues, resolution, fast_mode)
+        except Exception:
+            return False
+
+    def _write_image_part_cache(
+        self,
+        part_path: str,
+        image_path: str,
+        audio_path: str,
+        subtitle_cues: Optional[list],
+        resolution: Tuple[int, int],
+        fast_mode: bool,
+    ) -> None:
+        with open(self._image_part_cache_path(part_path), "w", encoding="utf-8") as f:
+            json.dump(
+                self._image_part_cache_meta(image_path, audio_path, subtitle_cues, resolution, fast_mode),
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
+
     def _write_image_part(
         self,
         frame_path: str,
@@ -418,6 +554,7 @@ class VideoAssembler:
         output_path: str,
         resolution: Tuple[int, int],
         subtitle_cues: Optional[list] = None,
+        fast_mode: bool = False,
     ) -> bool:
         audio_clip = None
         base_clip = None
@@ -460,9 +597,9 @@ class VideoAssembler:
                 fps=30,
                 logger=None,
                 threads=4,
-                preset="medium",
-                bitrate=self._bitrate_for_size(resolution, intermediate=True),
-                ffmpeg_params=self._ffmpeg_quality_params(),
+                preset="veryfast" if fast_mode else "medium",
+                bitrate=self._bitrate_for_size(resolution, intermediate=True, fast_mode=fast_mode),
+                ffmpeg_params=self._ffmpeg_quality_params(fast_mode=fast_mode),
             )
             self._log(f"   ✅ Đã dựng cảnh ảnh: {output_path} ({audio_clip.duration:.1f}s)")
             return True
