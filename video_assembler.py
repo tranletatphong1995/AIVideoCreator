@@ -431,24 +431,26 @@ class VideoAssembler:
             normalized_cues = self._normalize_subtitle_cues(subtitle_cues or [], duration)
 
             for cue_index, cue in enumerate(normalized_cues, start=1):
-                for step_index, step in enumerate(self._subtitle_reveal_steps(cue), start=1):
-                    overlay_path = os.path.join(
-                        self.TEMP_MERGE_DIR,
-                        f"{os.path.splitext(os.path.basename(output_path))[0]}_subtitle_{cue_index}_{step_index}.png",
-                    )
-                    self._compose_subtitle_overlay(step["text"], overlay_path, resolution)
-                    step_duration = max(0.04, step["end"] - step["start"])
-                    overlay_clip = (
-                        ImageClip(overlay_path, transparent=True)
-                        .with_start(step["start"])
-                        .with_duration(step_duration)
-                        .with_fps(30)
-                    )
-                    fade_duration = min(0.08, step_duration / 3)
-                    if step_index == 1 and fade_duration > 0.03:
-                        overlay_clip = overlay_clip.with_effects([vfx.FadeIn(fade_duration)])
-                    overlay_clips.append(overlay_clip)
-                    video_layers.append(overlay_clip)
+                overlay_path = os.path.join(
+                    self.TEMP_MERGE_DIR,
+                    f"{os.path.splitext(os.path.basename(output_path))[0]}_subtitle_{cue_index}.png",
+                )
+                self._compose_subtitle_overlay(cue["text"], overlay_path, resolution)
+                cue_duration = max(0.08, cue["end"] - cue["start"])
+                overlay_clip = (
+                    ImageClip(overlay_path, transparent=True)
+                    .with_start(cue["start"])
+                    .with_duration(cue_duration)
+                    .with_fps(30)
+                )
+                fade_duration = min(0.14, cue_duration / 4)
+                if fade_duration > 0.03:
+                    overlay_clip = overlay_clip.with_effects([
+                        vfx.FadeIn(fade_duration),
+                        vfx.FadeOut(fade_duration),
+                    ])
+                overlay_clips.append(overlay_clip)
+                video_layers.append(overlay_clip)
 
             final_clip = CompositeVideoClip(video_layers, size=resolution).with_audio(audio_clip)
             final_clip.write_videofile(
@@ -575,44 +577,6 @@ class VideoAssembler:
             normalized.append({"start": start, "end": end, "text": text})
             cursor = end
         return normalized
-
-    def _subtitle_reveal_steps(self, cue: dict) -> List[dict]:
-        text = str(cue.get("text", "") or "").strip()
-        start = float(cue.get("start", 0.0) or 0.0)
-        end = float(cue.get("end", start + 0.1) or start + 0.1)
-        duration = max(0.08, end - start)
-        words = text.split()
-        if len(words) <= 1 or duration < 0.45:
-            return [{"start": start, "end": end, "text": text}]
-
-        weights = [max(1, len(word.strip())) for word in words]
-        total_weight = max(1, sum(weights))
-        cursor = start
-        steps = []
-        visible_words = []
-        min_step = min(0.16, duration / max(1, len(words)))
-
-        for idx, word in enumerate(words):
-            visible_words.append(word)
-            if idx == len(words) - 1:
-                next_time = end
-            else:
-                share = duration * (weights[idx] / total_weight)
-                next_time = min(end, cursor + max(min_step, share))
-            if next_time <= cursor:
-                next_time = min(end, cursor + 0.05)
-            steps.append({
-                "start": cursor,
-                "end": next_time,
-                "text": " ".join(visible_words),
-            })
-            cursor = next_time
-            if cursor >= end:
-                break
-
-        if steps:
-            steps[-1]["end"] = end
-        return steps or [{"start": start, "end": end, "text": text}]
 
     def _compose_subtitle_overlay(
         self,

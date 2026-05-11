@@ -33,8 +33,10 @@ class SubtitleAgent:
 
     TEMP_DIR = "temp_slides"
     CACHE_PATH = os.path.join(TEMP_DIR, "subtitles.json")
-    MAX_CHARS_PER_CUE = 64
-    MIN_CUE_DURATION = 0.65
+    CACHE_VERSION = 2
+    MAX_CHARS_PER_CUE = 58
+    MIN_CUE_DURATION = 0.95
+    MAX_CUE_DURATION = 3.2
 
     def __init__(
         self,
@@ -82,7 +84,7 @@ class SubtitleAgent:
     def _cache_meta(self, slide_count: int, durations: List[float]) -> dict:
         rounded = [round(float(duration), 2) for duration in durations]
         return {
-            "version": 1,
+            "version": self.CACHE_VERSION,
             "fps": self.fps,
             "model_name": self.model_name,
             "ai_mode": self.ai_mode,
@@ -210,6 +212,9 @@ Rules:
 - JSON shape: [{{"start": 0.0, "end": 1.8, "text": "..."}}]
 - Keep each cue short and readable, max about {self.MAX_CHARS_PER_CUE} characters.
 - Each cue should fit at most 2 subtitle lines.
+- Prefer stable phrase-level cues, not word-by-word karaoke timing.
+- Keep cue duration usually between {self.MIN_CUE_DURATION:.2f}s and {self.MAX_CUE_DURATION:.2f}s.
+- Make timing follow natural TTS speech pace based on the narration text length.
 - Preserve meaning, but you may shorten filler words.
 - Cues must be chronological, non-overlapping, and cover most of the audio.
 - First cue should start at 0.0. Last cue must end at {audio_duration:.3f} or earlier.
@@ -261,7 +266,7 @@ Rules:
             start = self._safe_float(raw.get("start"), cursor)
             end = self._safe_float(raw.get("end"), start + self.MIN_CUE_DURATION)
             start = max(cursor, min(start, max_end))
-            end = max(start + 0.25, min(end, max_end))
+            end = max(start + self.MIN_CUE_DURATION, min(end, max_end))
             if start >= max_end:
                 break
 
@@ -269,7 +274,7 @@ Rules:
             chunk_duration = max(self.MIN_CUE_DURATION, (end - start) / max(1, len(chunks)))
             for chunk in chunks:
                 chunk_end = min(max_end, start + chunk_duration)
-                if chunk_end - start >= 0.25:
+                if chunk_end - start >= 0.45:
                     cues.append(self._make_cue(start, chunk_end, chunk))
                 start = chunk_end
                 cursor = chunk_end
@@ -292,7 +297,7 @@ Rules:
 
     def _make_cue(self, start: float, end: float, text: str) -> SubtitleCue:
         start = max(0.0, float(start))
-        end = max(start + 0.25, float(end))
+        end = max(start + 0.45, float(end))
         start_frame = int(round(start * self.fps))
         end_frame = max(start_frame + 1, int(round(end * self.fps)))
         return SubtitleCue(
@@ -331,6 +336,12 @@ Rules:
             chunks.append(current)
         return chunks
 
+    def _reading_weight(self, text: str) -> float:
+        words = text.split()
+        letters = len(re.sub(r"\s+", "", text))
+        punctuation_pauses = len(re.findall(r"[,.!?;:]", text)) * 2.5
+        return max(1.0, len(words) * 4.0 + letters * 0.45 + punctuation_pauses)
+
     def _fallback_cues(self, narration: str, audio_duration: float) -> List[SubtitleCue]:
         pieces = []
         for sentence in self._split_sentences(narration):
@@ -339,7 +350,7 @@ Rules:
         if not pieces:
             return []
 
-        weights = [max(1, len(piece)) for piece in pieces]
+        weights = [self._reading_weight(piece) for piece in pieces]
         total_weight = sum(weights)
         cursor = 0.0
         cues = []
