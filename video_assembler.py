@@ -6,6 +6,7 @@ Module 3: Video Assembler
 """
 
 import os
+import re
 import shutil
 import sys
 from typing import List, Optional, Tuple
@@ -425,31 +426,29 @@ class VideoAssembler:
         try:
             audio_clip = AudioFileClip(audio_path)
             duration = audio_clip.duration
-            base_clip = ImageClip(frame_path).with_duration(duration).with_fps(30)
+            base_clip = self._animated_image_clip(frame_path, duration, resolution, output_path)
             video_layers = [base_clip]
             normalized_cues = self._normalize_subtitle_cues(subtitle_cues or [], duration)
 
             for cue_index, cue in enumerate(normalized_cues, start=1):
-                overlay_path = os.path.join(
-                    self.TEMP_MERGE_DIR,
-                    f"{os.path.splitext(os.path.basename(output_path))[0]}_subtitle_{cue_index}.png",
-                )
-                self._compose_subtitle_overlay(cue["text"], overlay_path, resolution)
-                cue_duration = max(0.05, cue["end"] - cue["start"])
-                overlay_clip = (
-                    ImageClip(overlay_path, transparent=True)
-                    .with_start(cue["start"])
-                    .with_duration(cue_duration)
-                    .with_fps(30)
-                )
-                fade_duration = min(0.12, cue_duration / 3)
-                if fade_duration > 0.03:
-                    overlay_clip = overlay_clip.with_effects([
-                        vfx.FadeIn(fade_duration),
-                        vfx.FadeOut(fade_duration),
-                    ])
-                overlay_clips.append(overlay_clip)
-                video_layers.append(overlay_clip)
+                for step_index, step in enumerate(self._subtitle_reveal_steps(cue), start=1):
+                    overlay_path = os.path.join(
+                        self.TEMP_MERGE_DIR,
+                        f"{os.path.splitext(os.path.basename(output_path))[0]}_subtitle_{cue_index}_{step_index}.png",
+                    )
+                    self._compose_subtitle_overlay(step["text"], overlay_path, resolution)
+                    step_duration = max(0.04, step["end"] - step["start"])
+                    overlay_clip = (
+                        ImageClip(overlay_path, transparent=True)
+                        .with_start(step["start"])
+                        .with_duration(step_duration)
+                        .with_fps(30)
+                    )
+                    fade_duration = min(0.08, step_duration / 3)
+                    if step_index == 1 and fade_duration > 0.03:
+                        overlay_clip = overlay_clip.with_effects([vfx.FadeIn(fade_duration)])
+                    overlay_clips.append(overlay_clip)
+                    video_layers.append(overlay_clip)
 
             final_clip = CompositeVideoClip(video_layers, size=resolution).with_audio(audio_clip)
             final_clip.write_videofile(
@@ -475,6 +474,54 @@ class VideoAssembler:
                         clip.close()
                     except Exception:
                         pass
+
+    def _animated_image_clip(
+        self,
+        frame_path: str,
+        duration: float,
+        resolution: Tuple[int, int],
+        output_path: str,
+    ):
+        width, height = resolution
+        slide_num = 1
+        match = re.search(r"part_(\d+)", os.path.basename(output_path))
+        if match:
+            slide_num = int(match.group(1))
+
+        profiles = [
+            ((0.08, 0.10), (0.78, 0.24), 1.035, 1.105),
+            ((0.86, 0.16), (0.22, 0.74), 1.040, 1.110),
+            ((0.50, 0.08), (0.50, 0.84), 1.035, 1.100),
+            ((0.18, 0.82), (0.82, 0.18), 1.105, 1.040),
+            ((0.78, 0.76), (0.22, 0.22), 1.095, 1.035),
+        ]
+        start_anchor, end_anchor, start_scale, end_scale = profiles[(slide_num - 1) % len(profiles)]
+        duration = max(0.1, float(duration or 0.1))
+
+        def progress(t):
+            raw = min(1.0, max(0.0, float(t) / duration))
+            return raw * raw * (3 - 2 * raw)
+
+        def scale_at(t):
+            p = progress(t)
+            return start_scale + (end_scale - start_scale) * p
+
+        def position_at(t):
+            p = progress(t)
+            scale = scale_at(t)
+            extra_x = max(0.0, width * scale - width)
+            extra_y = max(0.0, height * scale - height)
+            anchor_x = start_anchor[0] + (end_anchor[0] - start_anchor[0]) * p
+            anchor_y = start_anchor[1] + (end_anchor[1] - start_anchor[1]) * p
+            return (-extra_x * anchor_x, -extra_y * anchor_y)
+
+        return (
+            ImageClip(frame_path)
+            .with_duration(duration)
+            .with_fps(30)
+            .resized(scale_at)
+            .with_position(position_at)
+        )
 
     def _compose_image_background_frame(
         self,
@@ -529,6 +576,44 @@ class VideoAssembler:
             cursor = end
         return normalized
 
+    def _subtitle_reveal_steps(self, cue: dict) -> List[dict]:
+        text = str(cue.get("text", "") or "").strip()
+        start = float(cue.get("start", 0.0) or 0.0)
+        end = float(cue.get("end", start + 0.1) or start + 0.1)
+        duration = max(0.08, end - start)
+        words = text.split()
+        if len(words) <= 1 or duration < 0.45:
+            return [{"start": start, "end": end, "text": text}]
+
+        weights = [max(1, len(word.strip())) for word in words]
+        total_weight = max(1, sum(weights))
+        cursor = start
+        steps = []
+        visible_words = []
+        min_step = min(0.16, duration / max(1, len(words)))
+
+        for idx, word in enumerate(words):
+            visible_words.append(word)
+            if idx == len(words) - 1:
+                next_time = end
+            else:
+                share = duration * (weights[idx] / total_weight)
+                next_time = min(end, cursor + max(min_step, share))
+            if next_time <= cursor:
+                next_time = min(end, cursor + 0.05)
+            steps.append({
+                "start": cursor,
+                "end": next_time,
+                "text": " ".join(visible_words),
+            })
+            cursor = next_time
+            if cursor >= end:
+                break
+
+        if steps:
+            steps[-1]["end"] = end
+        return steps or [{"start": start, "end": end, "text": text}]
+
     def _compose_subtitle_overlay(
         self,
         subtitle: str,
@@ -539,7 +624,7 @@ class VideoAssembler:
         canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(canvas)
         margin_x = max(44, int(width * 0.055))
-        bottom_margin = max(48, int(height * 0.07))
+        bottom_margin = max(96, int(height * 0.14))
         max_text_width = width - margin_x * 2
         font = self._subtitle_font(width, bold=True)
         lines = self._wrap_text(draw, subtitle, font, max_text_width, max_lines=2)
@@ -618,7 +703,7 @@ class VideoAssembler:
 
         draw = ImageDraw.Draw(canvas)
         margin_x = max(44, int(width * 0.055))
-        bottom_margin = max(48, int(height * 0.07))
+        bottom_margin = max(96, int(height * 0.14))
         max_text_width = width - margin_x * 2
         font = self._subtitle_font(width, bold=True)
         lines = self._wrap_text(draw, subtitle, font, max_text_width, max_lines=4)

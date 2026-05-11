@@ -48,6 +48,11 @@ def build():
         # Thêm các module cần thiết
         "--hidden-import=module_video_agent",
         "--hidden-import=module_audio_agent",
+        "--hidden-import=module_ai_providers",
+        "--hidden-import=module_ima2_runtime",
+        "--hidden-import=module_ima2_image_agent",
+        "--hidden-import=module_fooocus_agent",
+        "--hidden-import=module_subtitle_agent",
         "--hidden-import=video_assembler",
         "--hidden-import=ollama",
         "--hidden-import=pydantic",
@@ -66,6 +71,11 @@ def build():
         # Thêm data files
         "--add-data", f"{os.path.join(base_dir, 'module_video_agent.py')};.",
         "--add-data", f"{os.path.join(base_dir, 'module_audio_agent.py')};.",
+        "--add-data", f"{os.path.join(base_dir, 'module_ai_providers.py')};.",
+        "--add-data", f"{os.path.join(base_dir, 'module_ima2_runtime.py')};.",
+        "--add-data", f"{os.path.join(base_dir, 'module_ima2_image_agent.py')};.",
+        "--add-data", f"{os.path.join(base_dir, 'module_fooocus_agent.py')};.",
+        "--add-data", f"{os.path.join(base_dir, 'module_subtitle_agent.py')};.",
         "--add-data", f"{os.path.join(base_dir, 'video_assembler.py')};.",
     ]
 

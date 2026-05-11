@@ -10,6 +10,7 @@ import threading
 import json
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -36,6 +37,7 @@ class WorkerSignals(QObject):
     progress_update = pyqtSignal(int)       # Cập nhật % progress bar
     stage_update = pyqtSignal(str)          # Cập nhật giai đoạn hiện tại
     fooocus_api_button_update = pyqtSignal(bool, str)
+    ima2_button_update = pyqtSignal(bool, str)
     finished = pyqtSignal(str)              # Hoàn thành, trả về đường dẫn file output
     error = pyqtSignal(str)                 # Lỗi xảy ra
 
@@ -50,6 +52,8 @@ class MainWindow(QMainWindow):
         self._init_ui()
         self._load_ollama_models()
         self.tts_mode_combo.currentIndexChanged.connect(self._load_voices)
+        self.ai_mode_combo.currentIndexChanged.connect(self._update_ai_mode_controls)
+        self._update_ai_mode_controls()
 
     # ──────────────────────────────────────
     # Kết nối signal → slot
@@ -59,6 +63,7 @@ class MainWindow(QMainWindow):
         self.signals.progress_update.connect(self._update_progress)
         self.signals.stage_update.connect(self._update_stage)
         self.signals.fooocus_api_button_update.connect(self._update_fooocus_api_button)
+        self.signals.ima2_button_update.connect(self._update_ima2_button)
         self.signals.finished.connect(self._on_finished)
         self.signals.error.connect(self._on_error)
 
@@ -94,9 +99,61 @@ class MainWindow(QMainWindow):
         settings_group = QGroupBox("⚙️ Cài đặt")
         settings_layout = QVBoxLayout()
 
+        ai_mode_row = QHBoxLayout()
+        self.ai_mode_label = QLabel("Che do AI:")
+        ai_mode_row.addWidget(self.ai_mode_label)
+        self.ai_mode_combo = QComboBox()
+        self.ai_mode_combo.addItem("Local Ollama/Fooocus", "local")
+        self.ai_mode_combo.addItem("Online ChatGPT/ima2-gen", "online")
+        self.ai_mode_combo.setCurrentIndex(0)
+        ai_mode_row.addWidget(self.ai_mode_combo)
+        settings_layout.addLayout(ai_mode_row)
+
+        online_model_row = QHBoxLayout()
+        self.online_model_label = QLabel("ChatGPT model:")
+        online_model_row.addWidget(self.online_model_label)
+        self.online_model_combo = QComboBox()
+        self.online_model_combo.addItem("gpt-5.4-mini", "gpt-5.4-mini")
+        self.online_model_combo.addItem("gpt-5.4", "gpt-5.4")
+        self.online_model_combo.addItem("gpt-5.5", "gpt-5.5")
+        online_model_row.addWidget(self.online_model_combo)
+        settings_layout.addLayout(online_model_row)
+
+        online_parallel_row = QHBoxLayout()
+        self.online_parallel_label = QLabel("ChatGPT song song:")
+        online_parallel_row.addWidget(self.online_parallel_label)
+        self.online_parallel_spin = QSpinBox()
+        self.online_parallel_spin.setRange(1, 8)
+        self.online_parallel_spin.setValue(4)
+        self.online_parallel_spin.setToolTip("Số tác vụ ChatGPT/ima2-gen chạy song song. Tăng cao sẽ nhanh hơn nhưng dùng quota/mạng nhiều hơn.")
+        online_parallel_row.addWidget(self.online_parallel_spin)
+        online_parallel_row.addStretch()
+        settings_layout.addLayout(online_parallel_row)
+
+        ima2_endpoint_row = QHBoxLayout()
+        self.ima2_url_label = QLabel("ima2 server:")
+        ima2_endpoint_row.addWidget(self.ima2_url_label)
+        self.ima2_url_input = QLineEdit("http://127.0.0.1:3333")
+        self.ima2_url_input.setToolTip("ima2-gen server. If port 3333 is busy, the app also reads ~/.ima2/server.json.")
+        ima2_endpoint_row.addWidget(self.ima2_url_input)
+        self.btn_start_ima2 = QPushButton("Start ima2")
+        self.btn_start_ima2.setFixedWidth(90)
+        self.btn_start_ima2.clicked.connect(self._start_ima2_server)
+        ima2_endpoint_row.addWidget(self.btn_start_ima2)
+        settings_layout.addLayout(ima2_endpoint_row)
+
+        chatgpt_login_row = QHBoxLayout()
+        self.btn_chatgpt_login = QPushButton("Login ChatGPT")
+        self.btn_chatgpt_login.setToolTip("Run: npx --yes @openai/codex login")
+        self.btn_chatgpt_login.clicked.connect(self._login_chatgpt)
+        chatgpt_login_row.addWidget(self.btn_chatgpt_login)
+        chatgpt_login_row.addStretch()
+        settings_layout.addLayout(chatgpt_login_row)
+
         # Model selector
         model_row = QHBoxLayout()
-        model_row.addWidget(QLabel("Mô hình Ollama:"))
+        self.ollama_model_label = QLabel("Mô hình Ollama:")
+        model_row.addWidget(self.ollama_model_label)
         self.model_combo = QComboBox()
         self.model_combo.setMinimumWidth(250)
         self.model_combo.setPlaceholderText("Đang tải danh sách mô hình...")
@@ -164,14 +221,16 @@ class MainWindow(QMainWindow):
         settings_layout.addLayout(fooocus_row)
 
         fooocus_endpoint_row = QHBoxLayout()
-        fooocus_endpoint_row.addWidget(QLabel("Fooocus API:"))
+        self.fooocus_url_label = QLabel("Fooocus API:")
+        fooocus_endpoint_row.addWidget(self.fooocus_url_label)
         self.fooocus_url_input = QLineEdit("http://127.0.0.1:8888")
         self.fooocus_url_input.setToolTip("Endpoint Fooocus/Fooocus-API đang chạy. Mặc định dùng /v1/generation/text-to-image")
         fooocus_endpoint_row.addWidget(self.fooocus_url_input)
         settings_layout.addLayout(fooocus_endpoint_row)
 
         fooocus_dir_row = QHBoxLayout()
-        fooocus_dir_row.addWidget(QLabel("Thư mục API:"))
+        self.fooocus_dir_label = QLabel("Thư mục API:")
+        fooocus_dir_row.addWidget(self.fooocus_dir_label)
         self.fooocus_dir_input = QLineEdit()
         default_fooocus_dir = os.path.join(base_dir, "engines", "Fooocus-API")
         if os.path.isdir(default_fooocus_dir):
@@ -179,15 +238,16 @@ class MainWindow(QMainWindow):
         else:
             self.fooocus_dir_input.setPlaceholderText("Chọn thư mục Fooocus-API hoặc Fooocus local")
         fooocus_dir_row.addWidget(self.fooocus_dir_input)
-        btn_fooocus_dir = QPushButton("📁")
-        btn_fooocus_dir.setFixedWidth(42)
-        btn_fooocus_dir.setToolTip("Chọn thư mục chứa server Fooocus API")
-        btn_fooocus_dir.clicked.connect(self._browse_fooocus_dir)
-        fooocus_dir_row.addWidget(btn_fooocus_dir)
+        self.btn_fooocus_dir = QPushButton("📁")
+        self.btn_fooocus_dir.setFixedWidth(42)
+        self.btn_fooocus_dir.setToolTip("Chọn thư mục chứa server Fooocus API")
+        self.btn_fooocus_dir.clicked.connect(self._browse_fooocus_dir)
+        fooocus_dir_row.addWidget(self.btn_fooocus_dir)
         settings_layout.addLayout(fooocus_dir_row)
 
         fooocus_cmd_row = QHBoxLayout()
-        fooocus_cmd_row.addWidget(QLabel("Lệnh API:"))
+        self.fooocus_cmd_label = QLabel("Lệnh API:")
+        fooocus_cmd_row.addWidget(self.fooocus_cmd_label)
         self.fooocus_cmd_input = QLineEdit("start_fooocus_api.bat")
         self.fooocus_cmd_input.setToolTip("Lệnh chạy trong thư mục API. Có thể sửa theo repo Fooocus/Fooocus-API của bạn")
         fooocus_cmd_row.addWidget(self.fooocus_cmd_input)
@@ -488,6 +548,50 @@ class MainWindow(QMainWindow):
     # ──────────────────────────────────────
     # Duyệt thư mục output
     # ──────────────────────────────────────
+    def _current_ai_mode(self) -> str:
+        return self.ai_mode_combo.currentData() or "local"
+
+    def _is_online_mode(self) -> bool:
+        return self._current_ai_mode() == "online"
+
+    def _update_ai_mode_controls(self):
+        online = self._is_online_mode()
+        local_widgets = [
+            self.ollama_model_label,
+            self.model_combo,
+            self.btn_refresh_models,
+            self.fooocus_url_label,
+            self.fooocus_url_input,
+            self.fooocus_dir_label,
+            self.fooocus_dir_input,
+            self.btn_fooocus_dir,
+            self.fooocus_cmd_label,
+            self.fooocus_cmd_input,
+            self.btn_start_fooocus_api,
+        ]
+        online_widgets = [
+            self.online_model_label,
+            self.online_model_combo,
+            self.online_parallel_label,
+            self.online_parallel_spin,
+            self.ima2_url_label,
+            self.ima2_url_input,
+            self.btn_start_ima2,
+            self.btn_chatgpt_login,
+        ]
+        for widget in local_widgets:
+            widget.setVisible(not online)
+            widget.setEnabled(not online)
+        for widget in online_widgets:
+            widget.setVisible(online)
+            widget.setEnabled(online)
+        if online:
+            self.fooocus_checkbox.setText("Dung ima2-gen tao anh minh hoa + subtitle")
+            self.fooocus_checkbox.setToolTip("Online image-story mode uses ChatGPT/ima2-gen images, subtitle, and audio")
+        else:
+            self.fooocus_checkbox.setText("Dùng Fooocus tạo ảnh minh họa + subtitle")
+            self.fooocus_checkbox.setToolTip("Bật nhánh tạo video chỉ gồm ảnh Fooocus, subtitle rõ nét và audio")
+
     def _browse_output(self):
         folder = QFileDialog.getExistingDirectory(self, "Chọn thư mục xuất video")
         if folder:
@@ -508,6 +612,66 @@ class MainWindow(QMainWindow):
         if folder:
             self.fooocus_dir_input.setText(folder)
             self._append_log(f"🖼️ Đã chọn thư mục Fooocus API: {folder}")
+
+    def _login_chatgpt(self):
+        try:
+            from module_ima2_runtime import run_chatgpt_login
+
+            pid = run_chatgpt_login()
+            self._append_log(f"Opened ChatGPT/Codex login in a terminal (pid={pid}).")
+            self._append_log("After login completes, start ima2 or run the pipeline again.")
+        except Exception as e:
+            QMessageBox.warning(self, "ChatGPT login failed", f"Could not start login command:\n{e}")
+
+    def _start_ima2_server(self):
+        api_url = self.ima2_url_input.text().strip() or "http://127.0.0.1:3333"
+        self.btn_start_ima2.setEnabled(False)
+        self.btn_start_ima2.setText("Starting")
+        self._append_log("Starting ima2-gen server with: npx --yes ima2-gen serve")
+
+        def worker():
+            try:
+                from module_ima2_runtime import is_ima2_server_ready, launch_ima2_server, wait_for_ima2_server
+
+                if is_ima2_server_ready(api_url):
+                    self.signals.log_message.emit(f"ima2-gen is already ready: {api_url}")
+                    self.signals.stage_update.emit("ima2-gen ready")
+                    return
+
+                launch_ima2_server()
+                if wait_for_ima2_server(api_url, timeout_sec=180):
+                    self.signals.log_message.emit(f"ima2-gen is ready: {api_url}")
+                    self.signals.stage_update.emit("ima2-gen ready")
+                else:
+                    self.signals.log_message.emit(
+                        "ima2-gen was started, but the app could not connect yet. "
+                        "Check the ima2 terminal or ~/.ima2/server.json for the actual port."
+                    )
+                    self.signals.stage_update.emit("ima2-gen not reachable")
+            except Exception as e:
+                self.signals.log_message.emit(f"Could not start ima2-gen: {e}")
+                self.signals.stage_update.emit("ima2-gen startup error")
+            finally:
+                self.signals.ima2_button_update.emit(True, "Start ima2")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _ensure_ima2_ready(self, api_url: str):
+        from module_ima2_runtime import is_ima2_server_ready, launch_ima2_server, wait_for_ima2_server
+
+        api_url = (api_url or "http://127.0.0.1:3333").strip()
+        if is_ima2_server_ready(api_url):
+            self.signals.log_message.emit(f"ima2-gen is ready: {api_url}")
+            return
+
+        self.signals.log_message.emit("ima2-gen is not running. Starting npx --yes ima2-gen serve...")
+        launch_ima2_server()
+        if not wait_for_ima2_server(api_url, timeout_sec=180):
+            raise RuntimeError(
+                "ima2-gen did not become reachable. Check the ima2 terminal, then run "
+                "`npx @openai/codex login` if OAuth is missing or expired."
+            )
+        self.signals.log_message.emit(f"ima2-gen is ready: {api_url}")
 
     def _start_fooocus_api(self):
         """Khởi động Fooocus API trong console riêng và chờ endpoint sẵn sàng."""
@@ -680,8 +844,10 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Thiếu thông tin", "Vui lòng nhập ý tưởng video!")
             return
 
-        model_name = self.model_combo.currentData()
-        if not model_name:
+        ai_mode = self._current_ai_mode()
+        online_model = self.online_model_combo.currentData() or "gpt-5.4-mini"
+        model_name = online_model if ai_mode == "online" else self.model_combo.currentData()
+        if ai_mode != "online" and not model_name:
             QMessageBox.warning(self, "Thiếu mô hình", "Vui lòng chọn mô hình Ollama!")
             return
 
@@ -708,13 +874,15 @@ class MainWindow(QMainWindow):
         fooocus_url = self.fooocus_url_input.text().strip() or "http://127.0.0.1:8888"
         fooocus_dir = self.fooocus_dir_input.text().strip()
         fooocus_command = self.fooocus_cmd_input.text().strip()
+        ima2_url = self.ima2_url_input.text().strip() or "http://127.0.0.1:3333"
+        online_parallel = self.online_parallel_spin.value()
 
         # Chạy pipeline trong thread riêng
         thread = threading.Thread(
             target=self._run_pipeline,
             args=(prompt, model_name, max_slides, output_dir,
                   resolution, style_preset, output_language, tts_mode, voice_id, music_path, music_volume,
-                  resume_enabled, fooocus_enabled, fooocus_url, fooocus_dir, fooocus_command),
+                  resume_enabled, fooocus_enabled, fooocus_url, fooocus_dir, fooocus_command, ai_mode, ima2_url, online_parallel),
             daemon=True
         )
         thread.start()
@@ -722,16 +890,29 @@ class MainWindow(QMainWindow):
     def _run_pipeline(self, prompt, model_name, max_slides, output_dir,
                       resolution, style_preset, output_language, tts_mode, voice_id, music_path, music_volume,
                       resume_enabled=False, fooocus_enabled=False, fooocus_url="http://127.0.0.1:8888",
-                      fooocus_dir="", fooocus_command="start_fooocus_api.bat"):
+                      fooocus_dir="", fooocus_command="start_fooocus_api.bat", ai_mode="local",
+                      ima2_url="http://127.0.0.1:3333", online_parallel=4):
         """Pipeline chính chạy trong background thread."""
         try:
             from module_video_agent import VideoAgent, VideoPlan
             from module_audio_agent import AudioAgent
             from video_assembler import VideoAssembler
+            from module_ai_providers import Ima2ChatGPTTextProvider, LocalOllamaTextProvider
 
             width, height = resolution
             render_mode = "Fooocus image story" if fooocus_enabled else "HTML static slides"
             self.signals.log_message.emit(f"⚙️ Cấu hình: {width}x{height}, Chế độ={render_mode}, Phong cách={style_preset}, Ngôn ngữ={output_language}, TTS={tts_mode}, Nhạc={'Có' if music_path else 'Không'}")
+            online_mode = ai_mode == "online"
+            asset_workers = max(1, int(online_parallel or 1)) if online_mode else 2
+            if online_mode:
+                self.signals.stage_update.emit("Checking ima2-gen / ChatGPT...")
+                self._ensure_ima2_ready(ima2_url)
+                text_provider = Ima2ChatGPTTextProvider(model_name, server_url=ima2_url)
+            else:
+                text_provider = LocalOllamaTextProvider(model_name)
+            image_engine = "ima2-gen" if online_mode else "Fooocus"
+            render_mode = f"{image_engine} image story" if fooocus_enabled else "HTML static slides"
+            self.signals.log_message.emit(f"AI mode={ai_mode}, model={model_name}, render={render_mode}")
             if resume_enabled:
                 self.signals.log_message.emit("🔁 Resume đang bật: dùng lại file tạm hợp lệ nếu có.")
 
@@ -745,6 +926,8 @@ class MainWindow(QMainWindow):
                 resolution=resolution,
                 style_preset=style_preset,
                 output_language=output_language,
+                text_provider=text_provider,
+                ai_mode=ai_mode,
             )
             plan_path = os.path.join(video_agent.TEMP_DIR, "video_plan.json")
             plan_meta_path = os.path.join(video_agent.TEMP_DIR, "video_plan_meta.json")
@@ -757,6 +940,10 @@ class MainWindow(QMainWindow):
                             plan_meta = json.load(f)
                     if plan_meta.get("output_language") != output_language:
                         raise ValueError("Ngôn ngữ của plan cũ không khớp cấu hình hiện tại")
+                    if plan_meta.get("plan_cache_version") != 2:
+                        raise ValueError("Plan cache version cu khong khop")
+                    if plan_meta.get("ai_mode", "local") != ai_mode or plan_meta.get("model_name") != model_name:
+                        raise ValueError("AI mode/model cua plan cu khong khop cau hinh hien tai")
                     with open(plan_path, "r", encoding="utf-8") as f:
                         plan = VideoPlan.model_validate_json(f.read())
                     self.signals.log_message.emit(f"✅ Đã tải lại kế hoạch cũ: {plan_path}")
@@ -773,6 +960,9 @@ class MainWindow(QMainWindow):
                         {
                             "output_language": output_language,
                             "style_preset": style_preset,
+                            "plan_cache_version": 2,
+                            "ai_mode": ai_mode,
+                            "model_name": model_name,
                         },
                         f,
                         ensure_ascii=False,
@@ -796,43 +986,81 @@ class MainWindow(QMainWindow):
             self.signals.progress_update.emit(25)
 
             if fooocus_enabled:
-                from module_fooocus_agent import FooocusAgent
                 from module_subtitle_agent import SubtitleAgent
 
-                self.signals.stage_update.emit("🖼️ Kiểm tra / khởi động Fooocus API...")
-                self._ensure_fooocus_api_ready(fooocus_url, fooocus_dir, fooocus_command)
+                if online_mode:
+                    from module_ima2_image_agent import Ima2ImageAgent
 
-                self.signals.stage_update.emit("🎨 Giai đoạn 2/5: Tạo ảnh minh họa bằng Fooocus...")
-                fooocus_agent = FooocusAgent(
-                    fooocus_url,
-                    self.signals,
-                    resolution=resolution,
-                    style_preset=style_preset,
-                )
-                image_files = fooocus_agent.generate_images_for_plan(plan, resume=resume_enabled)
-                self.signals.progress_update.emit(50)
+                    self.signals.stage_update.emit("Stage 2/5: Creating images with ima2-gen...")
+                    image_agent = Ima2ImageAgent(
+                        ima2_url,
+                        self.signals,
+                        resolution=resolution,
+                        style_preset=style_preset,
+                        model_name=model_name,
+                    )
+                else:
+                    from module_fooocus_agent import FooocusAgent
 
-                self.signals.stage_update.emit("🔊 Giai đoạn 3/5: Tạo giọng nói TTS...")
+                    self.signals.stage_update.emit("🖼️ Kiểm tra / khởi động Fooocus API...")
+                    self._ensure_fooocus_api_ready(fooocus_url, fooocus_dir, fooocus_command)
+
+                    self.signals.stage_update.emit("🎨 Giai đoạn 2/5: Tạo ảnh minh họa bằng Fooocus...")
+                    image_agent = FooocusAgent(
+                        fooocus_url,
+                        self.signals,
+                        resolution=resolution,
+                        style_preset=style_preset,
+                    )
+                self.signals.stage_update.emit("⚡ Tạo ảnh và audio song song...")
                 audio_agent = AudioAgent(self.signals, mode=tts_mode)
                 narrations = [slide.narration for slide in plan.slides]
-                audio_files = audio_agent.generate_audio(narrations, voice_id=voice_id, resume=resume_enabled)
-                self.signals.progress_update.emit(75)
-
-                self.signals.stage_update.emit("💬 Giai đoạn 4/5: Tạo subtitle theo đúng frame...")
-                subtitle_agent = SubtitleAgent(
-                    model_name,
-                    self.signals,
-                    fps=30,
-                    output_language=output_language,
-                    resolution=resolution,
-                )
-                subtitle_cues = subtitle_agent.generate_for_plan(plan, audio_files, resume=resume_enabled)
+                image_workers = asset_workers if online_mode else 1
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    if online_mode:
+                        image_future = executor.submit(
+                            image_agent.generate_images_for_plan,
+                            plan,
+                            resume_enabled,
+                            image_workers,
+                        )
+                    else:
+                        image_future = executor.submit(
+                            image_agent.generate_images_for_plan,
+                            plan,
+                            resume_enabled,
+                        )
+                    audio_future = executor.submit(
+                        audio_agent.generate_audio,
+                        narrations,
+                        voice_id=voice_id,
+                        resume=resume_enabled,
+                    )
+                    audio_files = audio_future.result()
+                    self.signals.progress_update.emit(65)
+                    subtitle_agent = SubtitleAgent(
+                        model_name,
+                        self.signals,
+                        fps=30,
+                        output_language=output_language,
+                        resolution=resolution,
+                        text_provider=text_provider,
+                        ai_mode=ai_mode,
+                    )
+                    subtitle_cues = subtitle_agent.generate_for_plan(
+                        plan,
+                        audio_files,
+                        resume=resume_enabled,
+                        max_workers=asset_workers if online_mode else 1,
+                    )
+                    image_files = image_future.result()
                 self.signals.progress_update.emit(85)
 
                 self.signals.stage_update.emit("🎬 Giai đoạn 5/5: Dựng video ảnh + subtitle + audio...")
                 assembler = VideoAssembler(self.signals)
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                output_path = os.path.join(output_dir, f"fooocus_video_{timestamp}.mp4")
+                prefix = "ima2_video" if online_mode else "fooocus_video"
+                output_path = os.path.join(output_dir, f"{prefix}_{timestamp}.mp4")
                 assembler.assemble_image_story(
                     image_files,
                     audio_files,
@@ -848,7 +1076,20 @@ class MainWindow(QMainWindow):
 
             # ── Giai đoạn 2: Viết HTML/CSS ──
             self.signals.stage_update.emit("💻 Giai đoạn 2/5: Viết HTML/CSS cho các cảnh...")
-            html_files = video_agent.generate_html_slides(plan, resume=resume_enabled)
+            audio_agent = AudioAgent(self.signals, mode=tts_mode)
+            narrations = [slide.narration for slide in plan.slides]
+            audio_executor = ThreadPoolExecutor(max_workers=1)
+            audio_future = audio_executor.submit(
+                audio_agent.generate_audio,
+                narrations,
+                voice_id=voice_id,
+                resume=resume_enabled,
+            )
+            html_files = video_agent.generate_html_slides(
+                plan,
+                resume=resume_enabled,
+                max_workers=asset_workers if online_mode else 1,
+            )
             self.signals.progress_update.emit(35)
             self.signals.stage_update.emit("🖼️ Xuất ảnh xem trước PNG cho các cảnh...")
             preview_files = video_agent.render_preview_images(html_files, resume=resume_enabled)
@@ -865,9 +1106,8 @@ class MainWindow(QMainWindow):
 
             # ── Giai đoạn 4: TTS Audio ──
             self.signals.stage_update.emit("🔊 Giai đoạn 4/5: Tạo giọng nói TTS...")
-            audio_agent = AudioAgent(self.signals, mode=tts_mode)
-            narrations = [slide.narration for slide in plan.slides]
-            audio_files = audio_agent.generate_audio(narrations, voice_id=voice_id, resume=resume_enabled)
+            audio_files = audio_future.result()
+            audio_executor.shutdown(wait=True)
             self.signals.progress_update.emit(75)
 
             # ── Giai đoạn 5: Merging ──
@@ -908,6 +1148,10 @@ class MainWindow(QMainWindow):
     def _update_fooocus_api_button(self, enabled: bool, text: str):
         self.btn_start_fooocus_api.setEnabled(enabled)
         self.btn_start_fooocus_api.setText(text)
+
+    def _update_ima2_button(self, enabled: bool, text: str):
+        self.btn_start_ima2.setEnabled(enabled)
+        self.btn_start_ima2.setText(text)
 
     def _on_finished(self, output_path: str):
         self.btn_start.setEnabled(True)

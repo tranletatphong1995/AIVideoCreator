@@ -62,10 +62,35 @@ def check_ollama() -> bool:
         return False
 
 
+def check_ima2_optional() -> bool:
+    try:
+        from module_ima2_runtime import check_node_version, check_npx_ima2
+
+        node_ok, node_msg = check_node_version()
+        if node_ok:
+            print(f"[OK] Node.js for online mode: {node_msg}")
+        else:
+            print(f"[WARN] Node.js 20+ not ready for online mode: {node_msg}")
+            print("       Local Ollama/Fooocus mode still works without Node.js.")
+            return False
+
+        ima2_ok, ima2_msg = check_npx_ima2()
+        if ima2_ok:
+            print("[OK] npx ima2-gen is available")
+        else:
+            print(f"[WARN] npx ima2-gen check failed: {ima2_msg}")
+            print("       Fix for online mode: npm install -g ima2-gen, or let npx download it on first run.")
+        return ima2_ok
+    except Exception as exc:
+        print(f"[WARN] Optional ima2-gen check failed: {exc}")
+        return False
+
+
 def main() -> int:
     imports_ok = check_imports()
     browser_ok = check_playwright_browser() if imports_ok else False
     check_ollama()
+    check_ima2_optional()
 
     if imports_ok and browser_ok:
         print("\nEnvironment looks ready.")

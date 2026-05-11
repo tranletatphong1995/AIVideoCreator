@@ -12,11 +12,13 @@ import sys
 import html as html_lib
 import time
 import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional
 from pathlib import Path
 
 from pydantic import BaseModel, Field
-import ollama
+
+from module_ai_providers import LocalOllamaTextProvider
 
 
 # ══════════════════════════════════════
@@ -51,7 +53,7 @@ class VideoAgent:
 
     TEMP_DIR = "temp_slides"
     PREVIEW_DIR = os.path.join(TEMP_DIR, "previews")
-    HTML_CACHE_VERSION = 3
+    HTML_CACHE_VERSION = 4
     RENDER_CACHE_VERSION = 5
     STATIC_FRAME_SCALE = 2
     STYLE_PRESETS = {
@@ -208,6 +210,8 @@ class VideoAgent:
         resolution: tuple = (1280, 720),
         style_preset: str = "modern",
         output_language: str = "vi",
+        text_provider=None,
+        ai_mode: str = "local",
     ):
         """
         Args:
@@ -216,6 +220,8 @@ class VideoAgent:
             resolution: Tuple (width, height) cho kích thước video
         """
         self.model_name = model_name
+        self.ai_mode = ai_mode or "local"
+        self.text_provider = text_provider or LocalOllamaTextProvider(model_name)
         self.signals = signals
         self.width, self.height = resolution
         self.style_preset = style_preset if style_preset in self.STYLE_PRESETS else "modern"
@@ -252,6 +258,8 @@ class VideoAgent:
                 and data.get("resolution") == [self.width, self.height]
                 and data.get("style_preset") == self.style_preset
                 and data.get("output_language") == self.output_language
+                and data.get("ai_mode", "local") == self.ai_mode
+                and data.get("model_name") == self.model_name
                 and data.get("slide_count") == slide_count
             )
         except Exception:
@@ -265,6 +273,8 @@ class VideoAgent:
                     "resolution": [self.width, self.height],
                     "style_preset": self.style_preset,
                     "output_language": self.output_language,
+                    "ai_mode": self.ai_mode,
+                    "model_name": self.model_name,
                     "slide_count": slide_count,
                 },
                 f,
@@ -383,6 +393,8 @@ class VideoAgent:
                 and data.get("resolution") == [self.width, self.height]
                 and data.get("style_preset") == self.style_preset
                 and data.get("output_language") == self.output_language
+                and data.get("ai_mode", "local") == self.ai_mode
+                and data.get("model_name") == self.model_name
                 and data.get("slide_count") == len(html_files)
             )
         except Exception:
@@ -396,6 +408,8 @@ class VideoAgent:
                     "resolution": [self.width, self.height],
                     "style_preset": self.style_preset,
                     "output_language": self.output_language,
+                    "ai_mode": self.ai_mode,
+                    "model_name": self.model_name,
                     "slide_count": slide_count,
                 },
                 f,
@@ -449,8 +463,7 @@ Quy tắc:
 """
 
         try:
-            response = ollama.chat(
-                model=self.model_name,
+            response = self.text_provider.chat(
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
@@ -787,7 +800,7 @@ Quy tắc:
 </body>
 </html>"""
 
-    def generate_html_slides(self, plan: VideoPlan, resume: bool = False) -> List[str]:
+    def generate_html_slides(self, plan: VideoPlan, resume: bool = False, max_workers: int = 1) -> List[str]:
         """
         Với mỗi slide, gọi Ollama viết HTML/CSS đầy đủ.
         Trả về danh sách đường dẫn file HTML.
@@ -796,6 +809,9 @@ Quy tắc:
         html_cache_current = self._is_html_cache_current(len(plan.slides))
         if resume and not html_cache_current:
             self._log("   ℹ️ Cache HTML cũ không khớp size đã chọn, sẽ tạo lại HTML.")
+
+        if max(1, int(max_workers or 1)) > 1:
+            return self._generate_html_slides_parallel(plan, resume, html_cache_current, max_workers)
 
         for slide in plan.slides:
             html_path = os.path.join(self.TEMP_DIR, f"slide_{slide.slide_number}.html")
@@ -815,6 +831,46 @@ Quy tắc:
             html_files.append(html_path)
             self._log(f"   ✅ Đã lưu: {html_path}")
 
+        if len(html_files) == len(plan.slides):
+            self._write_html_cache(len(plan.slides))
+        return html_files
+
+    def _generate_html_slides_parallel(
+        self,
+        plan: VideoPlan,
+        resume: bool,
+        html_cache_current: bool,
+        max_workers: int,
+    ) -> List[str]:
+        html_files = [None] * len(plan.slides)
+        pending = []
+        for idx, slide in enumerate(plan.slides):
+            html_path = os.path.join(self.TEMP_DIR, f"slide_{slide.slide_number}.html")
+            if resume and html_cache_current and self._is_valid_file(html_path, min_size=50):
+                html_files[idx] = html_path
+                self._log(f"   🔁 Dùng lại HTML cảnh {slide.slide_number}: {html_path}")
+                continue
+            pending.append((idx, slide, html_path))
+
+        def generate_one(item):
+            idx, slide, html_path = item
+            self._log(f"💻 Đang viết HTML cho cảnh {slide.slide_number}/{plan.total_slides}...")
+            html_content = self._generate_single_html(slide)
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(html_content)
+            return idx, html_path
+
+        workers = max(1, int(max_workers or 1))
+        if pending:
+            self._log(f"⚡ Sinh HTML song song với {workers} workers...")
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(generate_one, item) for item in pending]
+            for future in as_completed(futures):
+                idx, html_path = future.result()
+                html_files[idx] = html_path
+                self._log(f"   ✅ Đã lưu: {html_path}")
+
+        html_files = [path for path in html_files if path]
         if len(html_files) == len(plan.slides):
             self._write_html_cache(len(plan.slides))
         return html_files
@@ -859,8 +915,7 @@ YÊU CẦU CỰC KỲ QUAN TRỌNG:
 """
 
         try:
-            response = ollama.chat(
-                model=self.model_name,
+            response = self.text_provider.chat(
                 messages=[
                     {
                         "role": "system",

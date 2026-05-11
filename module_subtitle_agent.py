@@ -9,11 +9,13 @@ import json
 import os
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List
 
-import ollama
 from moviepy import AudioFileClip
 from pydantic import BaseModel, Field
+
+from module_ai_providers import LocalOllamaTextProvider
 
 
 class SubtitleCue(BaseModel):
@@ -41,8 +43,12 @@ class SubtitleAgent:
         fps: int = 30,
         output_language: str = "vi",
         resolution: tuple = (1280, 720),
+        text_provider=None,
+        ai_mode: str = "local",
     ):
         self.model_name = model_name
+        self.ai_mode = ai_mode or "local"
+        self.text_provider = text_provider or LocalOllamaTextProvider(model_name)
         self.signals = signals
         self.fps = max(1, int(fps or 30))
         self.output_language = output_language if output_language in {"vi", "en"} else "vi"
@@ -79,6 +85,7 @@ class SubtitleAgent:
             "version": 1,
             "fps": self.fps,
             "model_name": self.model_name,
+            "ai_mode": self.ai_mode,
             "output_language": self.output_language,
             "resolution": [self.width, self.height],
             "slide_count": slide_count,
@@ -133,7 +140,7 @@ class SubtitleAgent:
                 continue
         return json.loads(text)
 
-    def generate_for_plan(self, plan, audio_files: List[str], resume: bool = False) -> List[List[SubtitleCue]]:
+    def generate_for_plan(self, plan, audio_files: List[str], resume: bool = False, max_workers: int = 1) -> List[List[SubtitleCue]]:
         slides = list(getattr(plan, "slides", []) or [])
         durations = [
             self._audio_duration(audio_files[idx])
@@ -147,6 +154,8 @@ class SubtitleAgent:
             if cached:
                 self._log(f"🔁 Dùng lại subtitle cache: {self.CACHE_PATH}")
                 return cached
+        if max(1, int(max_workers or 1)) > 1:
+            return self._generate_for_plan_parallel(slides, durations, max_workers)
 
         all_cues = []
         self._log(f"💬 Tạo subtitle timed cues bằng Ollama ({self.fps}fps)...")
@@ -155,6 +164,28 @@ class SubtitleAgent:
             self._log(f"   💬 Subtitle cảnh {idx}/{len(slides)} ({duration:.1f}s)")
             all_cues.append(self.generate_for_slide(slide, duration))
 
+        self._write_cache(all_cues, durations)
+        self._log(f"✅ Đã lưu subtitle cache: {self.CACHE_PATH}")
+        return all_cues
+
+    def _generate_for_plan_parallel(self, slides, durations: List[float], max_workers: int) -> List[List[SubtitleCue]]:
+        workers = max(1, int(max_workers or 1))
+        all_cues = [None] * len(slides)
+        self._log(f"⚡ Tạo subtitle song song với {workers} workers...")
+
+        def generate_one(item):
+            idx, slide = item
+            duration = durations[idx]
+            self._log(f"   💬 Subtitle cảnh {idx + 1}/{len(slides)} ({duration:.1f}s)")
+            return idx, self.generate_for_slide(slide, duration)
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(generate_one, item) for item in enumerate(slides)]
+            for future in as_completed(futures):
+                idx, cues = future.result()
+                all_cues[idx] = cues
+
+        all_cues = [cues or [] for cues in all_cues]
         self._write_cache(all_cues, durations)
         self._log(f"✅ Đã lưu subtitle cache: {self.CACHE_PATH}")
         return all_cues
@@ -185,8 +216,7 @@ Rules:
 """
 
         try:
-            response = ollama.chat(
-                model=self.model_name,
+            response = self.text_provider.chat(
                 messages=[
                     {
                         "role": "system",
