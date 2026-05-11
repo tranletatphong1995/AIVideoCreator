@@ -491,39 +491,43 @@ class VideoAssembler:
             slide_num = int(match.group(1))
 
         profiles = [
-            ((0.08, 0.10), (0.78, 0.24), 1.035, 1.105),
-            ((0.86, 0.16), (0.22, 0.74), 1.040, 1.110),
-            ((0.50, 0.08), (0.50, 0.84), 1.035, 1.100),
-            ((0.18, 0.82), (0.82, 0.18), 1.105, 1.040),
-            ((0.78, 0.76), (0.22, 0.22), 1.095, 1.035),
+            ((0.18, 0.16), (0.68, 0.28), 1.060),
+            ((0.78, 0.20), (0.30, 0.68), 1.065),
+            ((0.50, 0.14), (0.50, 0.72), 1.055),
+            ((0.24, 0.72), (0.74, 0.24), 1.065),
+            ((0.70, 0.66), (0.28, 0.30), 1.055),
         ]
-        start_anchor, end_anchor, start_scale, end_scale = profiles[(slide_num - 1) % len(profiles)]
+        start_anchor, end_anchor, scale = profiles[(slide_num - 1) % len(profiles)]
         duration = max(0.1, float(duration or 0.1))
+        target_width = self._even_int(width * scale)
+        target_height = self._even_int(height * scale)
 
         def progress(t):
             raw = min(1.0, max(0.0, float(t) / duration))
             return raw * raw * (3 - 2 * raw)
 
-        def scale_at(t):
-            p = progress(t)
-            return start_scale + (end_scale - start_scale) * p
-
         def position_at(t):
             p = progress(t)
-            scale = scale_at(t)
-            extra_x = max(0.0, width * scale - width)
-            extra_y = max(0.0, height * scale - height)
+            extra_x = max(0.0, target_width - width)
+            extra_y = max(0.0, target_height - height)
             anchor_x = start_anchor[0] + (end_anchor[0] - start_anchor[0]) * p
             anchor_y = start_anchor[1] + (end_anchor[1] - start_anchor[1]) * p
-            return (-extra_x * anchor_x, -extra_y * anchor_y)
+            return (
+                -self._even_int(extra_x * anchor_x),
+                -self._even_int(extra_y * anchor_y),
+            )
 
         return (
             ImageClip(frame_path)
             .with_duration(duration)
             .with_fps(30)
-            .resized(scale_at)
+            .resized(new_size=(target_width, target_height))
             .with_position(position_at)
         )
+
+    @staticmethod
+    def _even_int(value: float) -> int:
+        return int(round(float(value) / 2.0) * 2)
 
     def _compose_image_background_frame(
         self,
