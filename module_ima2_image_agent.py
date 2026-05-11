@@ -80,10 +80,10 @@ class Ima2ImageAgent:
         return "1024x1024"
 
     def _build_prompt(self, slide) -> str:
-        image_prompt = str(getattr(slide, "image_prompt", "") or "").strip()
-        fallback_visual = str(getattr(slide, "html_idea", "") or "").strip()
+        image_prompt = self._clean_prompt_text(getattr(slide, "image_prompt", ""))
+        fallback_visual = self._clean_prompt_text(getattr(slide, "html_idea", ""))
         pieces = [
-            str(getattr(slide, "title", "")).strip(),
+            self._clean_prompt_text(getattr(slide, "title", "")),
             image_prompt or fallback_visual,
         ]
         subject = ". ".join(part for part in pieces if part)
@@ -95,6 +95,34 @@ class Ima2ImageAgent:
             "safe empty space near the bottom for subtitles. No text, letters, captions, "
             "subtitles, logos, or watermark in the image."
         )
+
+    def _build_safe_prompt(self, slide) -> str:
+        title = self._clean_prompt_text(getattr(slide, "title", "")) or "Video scene"
+        visual = self._clean_prompt_text(getattr(slide, "html_idea", ""))
+        subject = ". ".join(part for part in (title, visual) if part)
+        subject = re.sub(r"\s+", " ", subject)[:420]
+        return (
+            f"{subject}. Create a calm, respectful, symbolic editorial illustration for a video scene. "
+            f"Visual style: {self.STYLE_HINTS.get(self.style_preset, self.STYLE_HINTS['modern'])}. "
+            "Use a peaceful cinematic composition, soft light, historical atmosphere, human-safe imagery, "
+            "and no written text, no captions, no logos, no watermark."
+        )
+
+    @staticmethod
+    def _clean_prompt_text(value) -> str:
+        text = str(value or "")
+        text = text.replace("\ufffc", " ")
+        text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", " ", text)
+        return re.sub(r"\s+", " ", text).strip()
+
+    @staticmethod
+    def _response_excerpt(response, limit: int = 500) -> str:
+        try:
+            text = response.text
+        except Exception:
+            text = ""
+        text = re.sub(r"\s+", " ", text or "").strip()
+        return text[:limit]
 
     def _generated_dir(self) -> Path:
         info = read_ima2_server_info()
@@ -199,7 +227,19 @@ class Ima2ImageAgent:
             "n": 1,
             "webSearchEnabled": False,
         }
-        response = self._post_generate_with_retry(payload)
+        try:
+            response = self._post_generate_with_retry(payload)
+        except requests.HTTPError as exc:
+            response = getattr(exc, "response", None)
+            if response is None or response.status_code != 422:
+                raise
+            excerpt = self._response_excerpt(response)
+            if excerpt:
+                self._log(f"   ima2-gen rejected prompt (422): {excerpt}")
+            self._log("   Retrying ima2 image with a shorter safe prompt...")
+            safe_payload = dict(payload)
+            safe_payload["prompt"] = self._build_safe_prompt(slide)
+            response = self._post_generate_with_retry(safe_payload, max_attempts=2)
         return self._save_result(response.json(), output_path)
 
     def generate_images_for_plan(self, plan, resume: bool = False, max_workers: int = 1) -> List[str]:
