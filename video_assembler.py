@@ -503,7 +503,7 @@ class VideoAssembler:
                 cue = cue.model_dump()
             cue_payload.append(cue)
         return {
-            "version": 2,
+            "version": 3,
             "image": stamp(image_path),
             "audio": stamp(audio_path),
             "resolution": list(resolution),
@@ -629,12 +629,15 @@ class VideoAssembler:
         if match:
             slide_num = int(match.group(1))
 
+        # Alternate slow zoom-in and zoom-out profiles. Pan stays subtle so
+        # the motion feels alive without creating frame-to-frame jitter.
         profiles = [
-            (1.000, 1.035, (0.48, 0.50), (0.54, 0.47)),
-            (1.038, 1.005, (0.54, 0.48), (0.47, 0.53)),
-            (1.000, 1.028, (0.50, 0.53), (0.50, 0.47)),
-            (1.032, 1.004, (0.47, 0.48), (0.54, 0.52)),
-            (1.000, 1.030, (0.52, 0.47), (0.48, 0.53)),
+            (1.000, 1.040, (0.48, 0.50), (0.54, 0.47)),  # zoom in, drift up-right
+            (1.040, 1.004, (0.54, 0.48), (0.47, 0.53)),  # zoom out, drift down-left
+            (1.000, 1.034, (0.50, 0.53), (0.50, 0.47)),  # zoom in, drift upward
+            (1.036, 1.004, (0.47, 0.48), (0.54, 0.52)),  # zoom out, drift down-right
+            (1.000, 1.038, (0.52, 0.47), (0.48, 0.53)),  # zoom in, drift down-left
+            (1.034, 1.004, (0.48, 0.54), (0.53, 0.47)),  # zoom out, drift up-right
         ]
         start_scale, end_scale, start_anchor, end_anchor = profiles[(slide_num - 1) % len(profiles)]
         duration = max(0.1, float(duration or 0.1))
