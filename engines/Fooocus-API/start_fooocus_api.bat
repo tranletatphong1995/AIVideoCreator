@@ -23,13 +23,12 @@ if /I "%~1"=="--check" (
     echo   Fooocus API Engine - Check
     echo ============================================
     echo Folder: %CD%
-    where py >nul 2>nul
-    if not errorlevel 1 (
-        py -3.10 -c "import sys; print('Python 3.10:', sys.executable)"
-        if errorlevel 1 (
-            echo [ERR] Python 3.10 was not found by py launcher.
-            exit /b 1
-        )
+where py >nul 2>nul
+if not errorlevel 1 (
+    py -3.10 -c "import sys; print('Python 3.10:', sys.executable)" 2>nul
+    if errorlevel 1 py -3.11 -c "import sys; print('Python 3.11:', sys.executable)" 2>nul
+    if errorlevel 1 py -3 -c "import sys; print('Python 3:', sys.executable)"
+    if errorlevel 1 exit /b 1
     ) else (
         where python >nul 2>nul
         if errorlevel 1 (
@@ -80,6 +79,8 @@ echo [*] Creating Fooocus API virtual environment...
 where py >nul 2>nul
 if not errorlevel 1 (
     py -3.10 -m venv "%VENV_DIR%"
+    if errorlevel 1 py -3.11 -m venv "%VENV_DIR%"
+    if errorlevel 1 py -3 -m venv "%VENV_DIR%"
 ) else (
     where python >nul 2>nul
     if not errorlevel 1 (

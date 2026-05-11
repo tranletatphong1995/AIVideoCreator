@@ -9,13 +9,13 @@ import os
 import subprocess
 import sys
 from typing import List, Optional
-from pathlib import Path
 
 
 class AudioAgent:
     """Agent tạo âm thanh tiếng Việt từ lời thoại slide bằng VieNeu-TTS SDK."""
 
     AUDIO_DIR = "temp_audio"
+    VIENEU_EXTRA_INDEX = "https://pnnbao97.github.io/llama-cpp-python-v0.3.16/cpu/"
 
     def __init__(self, signals=None, mode: str = "standard", emotion: str = "natural"):
         """
@@ -68,6 +68,8 @@ class AudioAgent:
             cwd=os.path.dirname(os.path.abspath(__file__)),
             env=env,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             capture_output=True,
             timeout=timeout_sec,
         )
@@ -87,6 +89,8 @@ class AudioAgent:
         if os.path.exists(output_path):
             os.remove(output_path)
         self._log("🔊 Test TTS trước khi render video...")
+        if not self._ensure_vieneu_installed():
+            raise RuntimeError("Cannot install VieNeu-TTS. Please check internet/pip.")
         self._run_tts_worker(text, output_path, voice_id=voice_id, timeout_sec=900)
         self._log(f"✅ Test TTS thành công: {output_path}")
         return output_path
@@ -105,9 +109,15 @@ class AudioAgent:
             try:
                 # Cài đặt vieneu (có pre-built wheel cho Windows CPU)
                 subprocess.check_call([
-                    sys.executable, "-m", "pip", "install", "vieneu",
-                    "--extra-index-url", "https://pnnbao97.github.io/llama-cpp-python-v0.3.16/cpu/"
-                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "--upgrade",
+                    "vieneu",
+                    "--extra-index-url",
+                    self.VIENEU_EXTRA_INDEX,
+                ])
                 self._log("✅ Đã cài đặt VieNeu-TTS SDK thành công")
                 return True
             except subprocess.CalledProcessError as e:
@@ -199,16 +209,6 @@ class AudioAgent:
         if not self._ensure_vieneu_installed():
             raise RuntimeError("Không thể cài đặt VieNeu-TTS. Hãy cài thủ công: pip install vieneu")
 
-        voice_data = None
-
-        # Lấy voice data nếu có chỉ định
-        if voice_id:
-            try:
-                voice_data = self.tts.get_preset_voice(voice_id)
-                self._log(f"🎤 Đang dùng giọng: {voice_id}")
-            except Exception as e:
-                self._log(f"⚠️ Không tìm thấy giọng '{voice_id}', dùng giọng mặc định: {e}")
-
         for idx, text in enumerate(narrations):
             slide_num = idx + 1
             output_path = os.path.join(self.AUDIO_DIR, f"audio_{slide_num}.wav")
@@ -254,13 +254,6 @@ class AudioAgent:
 
         if not self._ensure_vieneu_installed():
             raise RuntimeError("Không thể cài đặt VieNeu-TTS. Hãy cài thủ công: pip install vieneu")
-
-        if voice_id:
-            try:
-                self.tts.get_preset_voice(voice_id)
-                self._log(f"🎤 Đang dùng giọng: {voice_id}")
-            except Exception as e:
-                self._log(f"⚠️ Không tìm thấy giọng '{voice_id}', dùng giọng mặc định: {e}")
 
         self._log(f"🔊 Tạo audio slide {slide_num}/{total_slides}...")
         self._log(f"   📝 \"{text[:80]}{'...' if len(text) > 80 else ''}\"")

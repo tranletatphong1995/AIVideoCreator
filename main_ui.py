@@ -38,6 +38,9 @@ class WorkerSignals(QObject):
     stage_update = pyqtSignal(str)          # Cập nhật giai đoạn hiện tại
     fooocus_api_button_update = pyqtSignal(bool, str)
     ima2_button_update = pyqtSignal(bool, str)
+    runtime_setup_button_update = pyqtSignal(bool, str)
+    ollama_setup_button_update = pyqtSignal(bool, str)
+    chatgpt_login_button_update = pyqtSignal(bool, str)
     finished = pyqtSignal(str)              # Hoàn thành, trả về đường dẫn file output
     error = pyqtSignal(str)                 # Lỗi xảy ra
 
@@ -64,6 +67,9 @@ class MainWindow(QMainWindow):
         self.signals.stage_update.connect(self._update_stage)
         self.signals.fooocus_api_button_update.connect(self._update_fooocus_api_button)
         self.signals.ima2_button_update.connect(self._update_ima2_button)
+        self.signals.runtime_setup_button_update.connect(self._update_runtime_setup_button)
+        self.signals.ollama_setup_button_update.connect(self._update_ollama_setup_button)
+        self.signals.chatgpt_login_button_update.connect(self._update_chatgpt_login_button)
         self.signals.finished.connect(self._on_finished)
         self.signals.error.connect(self._on_error)
 
@@ -111,6 +117,15 @@ class MainWindow(QMainWindow):
         self.ai_mode_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         ai_mode_row.addWidget(self.ai_mode_combo, 1)
         settings_layout.addLayout(ai_mode_row)
+
+        setup_row = QHBoxLayout()
+        self.btn_prepare_runtime = QPushButton("Cài/kiểm tra môi trường")
+        self.btn_prepare_runtime.setMinimumWidth(180)
+        self.btn_prepare_runtime.setToolTip("Cài/cập nhật dependency Python, Playwright, TTS và runtime theo chế độ đang chọn")
+        self.btn_prepare_runtime.clicked.connect(self._prepare_runtime_environment)
+        setup_row.addWidget(self.btn_prepare_runtime)
+        setup_row.addStretch()
+        settings_layout.addLayout(setup_row)
 
         online_model_row = QHBoxLayout()
         self.online_model_label = QLabel("ChatGPT model:")
@@ -168,6 +183,11 @@ class MainWindow(QMainWindow):
         self.btn_refresh_models.setToolTip("Tải lại danh sách mô hình")
         self.btn_refresh_models.clicked.connect(self._load_ollama_models)
         model_row.addWidget(self.btn_refresh_models)
+        self.btn_install_ollama = QPushButton("Cài Ollama/model")
+        self.btn_install_ollama.setMinimumWidth(132)
+        self.btn_install_ollama.setToolTip("Cài Ollama bằng winget nếu thiếu, chạy server và pull model mặc định nếu chưa có")
+        self.btn_install_ollama.clicked.connect(self._install_ollama_model)
+        model_row.addWidget(self.btn_install_ollama)
         settings_layout.addLayout(model_row)
 
         # Slide count
@@ -297,8 +317,8 @@ class MainWindow(QMainWindow):
         self.tts_mode_combo.addItem("⚡ Nhanh (CPU)", "turbo")
         self.tts_mode_combo.setCurrentIndex(0)
         tts_row.addWidget(self.tts_mode_combo, 1)
-        self.btn_test_tts = QPushButton("Thử TTS")
-        self.btn_test_tts.setMinimumWidth(96)
+        self.btn_test_tts = QPushButton("Cài/Test TTS")
+        self.btn_test_tts.setMinimumWidth(112)
         self.btn_test_tts.setToolTip("Tạo thử một file audio ngắn trước khi chạy pipeline")
         self.btn_test_tts.clicked.connect(self._test_tts)
         tts_row.addWidget(self.btn_test_tts)
@@ -564,6 +584,184 @@ class MainWindow(QMainWindow):
     # ──────────────────────────────────────
     # Load mô hình Ollama
     # ──────────────────────────────────────
+    @staticmethod
+    def _tail_text(text: str, limit: int = 1800) -> str:
+        text = (text or "").strip()
+        if len(text) <= limit:
+            return text
+        return "...\n" + text[-limit:]
+
+    def _run_setup_command(self, command, label: str, timeout_sec: int = 1800, cwd: str = None):
+        cwd = cwd or base_dir
+        self.signals.log_message.emit(f"▶ {label}")
+        completed = subprocess.run(
+            command,
+            cwd=cwd,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=timeout_sec,
+        )
+        output = self._tail_text((completed.stdout or "") + ("\n" + completed.stderr if completed.stderr else ""))
+        if output:
+            self.signals.log_message.emit(output)
+        if completed.returncode != 0:
+            raise RuntimeError(f"{label} thất bại với mã lỗi {completed.returncode}")
+        return completed
+
+    def _install_with_winget(self, package_id: str, label: str):
+        if os.name != "nt":
+            raise RuntimeError(f"Không thể tự cài {label} ngoài Windows. Hãy cài thủ công.")
+        try:
+            subprocess.run(["winget", "--version"], capture_output=True, text=True, timeout=15, check=True)
+        except Exception as exc:
+            raise RuntimeError(f"Không tìm thấy winget để tự cài {label}. Hãy cài {label} thủ công.") from exc
+
+        self._run_setup_command(
+            [
+                "winget",
+                "install",
+                "-e",
+                "--id",
+                package_id,
+                "--accept-package-agreements",
+                "--accept-source-agreements",
+            ],
+            f"Cài {label} bằng winget",
+            timeout_sec=3600,
+        )
+
+    def _prepare_python_runtime(self):
+        from module_audio_agent import AudioAgent
+
+        extra_index = AudioAgent.VIENEU_EXTRA_INDEX
+        self._run_setup_command([sys.executable, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"], "Cập nhật pip")
+        self._run_setup_command(
+            [sys.executable, "-m", "pip", "install", "-r", "requirements.txt", "--extra-index-url", extra_index],
+            "Cài/cập nhật Python packages",
+        )
+        self._run_setup_command([sys.executable, "-m", "playwright", "install", "chromium"], "Cài Playwright Chromium")
+
+    def _prepare_tts_runtime(self, tts_mode: str, voice_id=None):
+        from module_audio_agent import AudioAgent
+
+        self.signals.log_message.emit("🔊 Cài và test VieNeu-TTS. Lần đầu có thể tải model giọng nói.")
+        audio_agent = AudioAgent(self.signals, mode=tts_mode)
+        audio_agent.test_tts_sample("Đây là câu kiểm tra giọng nói của AI Video Creator.", voice_id=voice_id)
+
+    def _ensure_node_runtime(self, install: bool = True):
+        from module_ima2_runtime import check_node_version
+
+        ok, msg = check_node_version()
+        if ok:
+            self.signals.log_message.emit(f"✅ Node.js sẵn sàng: {msg}")
+            return True
+        self.signals.log_message.emit(f"⚠️ Node.js 20+ chưa sẵn sàng: {msg}")
+        if not install:
+            return False
+        self._install_with_winget("OpenJS.NodeJS.LTS", "Node.js LTS")
+        ok, msg = check_node_version()
+        if not ok:
+            raise RuntimeError("Đã cài Node.js nhưng tiến trình hiện tại chưa thấy node. Hãy đóng app/mở lại run.bat.")
+        self.signals.log_message.emit(f"✅ Node.js sẵn sàng: {msg}")
+        return True
+
+    def _is_ollama_command_ready(self) -> bool:
+        try:
+            subprocess.run(["ollama", "--version"], capture_output=True, text=True, timeout=15, check=True)
+            return True
+        except Exception:
+            return False
+
+    def _ollama_server_ready(self) -> bool:
+        try:
+            import requests
+
+            response = requests.get("http://127.0.0.1:11434/api/tags", timeout=3)
+            return response.status_code < 500
+        except Exception:
+            return False
+
+    def _ensure_ollama_runtime(self, model_name: str = "qwen2.5-coder", pull_model: bool = True):
+        if not self._is_ollama_command_ready():
+            self.signals.log_message.emit("⚠️ Chưa tìm thấy Ollama. Đang thử cài bằng winget...")
+            self._install_with_winget("Ollama.Ollama", "Ollama")
+            if not self._is_ollama_command_ready():
+                raise RuntimeError("Đã cài Ollama nhưng tiến trình hiện tại chưa thấy ollama. Hãy đóng app/mở lại run.bat.")
+
+        if not self._ollama_server_ready():
+            self.signals.log_message.emit("▶ Khởi động Ollama server...")
+            creationflags = subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0
+            subprocess.Popen(["ollama", "serve"], creationflags=creationflags)
+            deadline = time.time() + 60
+            while time.time() < deadline and not self._ollama_server_ready():
+                time.sleep(2)
+        if not self._ollama_server_ready():
+            raise RuntimeError("Không kết nối được Ollama server sau khi khởi động.")
+
+        if pull_model:
+            model_name = model_name or "qwen2.5-coder"
+            self._run_setup_command(["ollama", "pull", model_name], f"Tải Ollama model: {model_name}", timeout_sec=7200)
+        self.signals.log_message.emit("✅ Ollama đã sẵn sàng")
+
+    def _selected_ollama_model_name(self) -> str:
+        model_name = self.model_combo.currentData()
+        if not model_name:
+            model_name = "qwen2.5-coder"
+        return str(model_name)
+
+    def _prepare_runtime_environment(self):
+        online = self._is_online_mode()
+        fooocus_enabled = self.fooocus_checkbox.isChecked()
+        tts_mode = self.tts_mode_combo.currentData() or "standard"
+        voice_id = self.voice_combo.currentData()
+        model_name = self._selected_ollama_model_name()
+        fooocus_url = self.fooocus_url_input.text().strip() or "http://127.0.0.1:8888"
+        fooocus_dir = self.fooocus_dir_input.text().strip()
+        fooocus_command = self.fooocus_cmd_input.text().strip() or "start_fooocus_api.bat"
+
+        self.signals.runtime_setup_button_update.emit(False, "Đang cài...")
+
+        def worker():
+            try:
+                self.signals.stage_update.emit("🧰 Chuẩn bị môi trường...")
+                self._prepare_python_runtime()
+                self._prepare_tts_runtime(tts_mode, voice_id=voice_id)
+                if online:
+                    self._ensure_node_runtime(install=True)
+                    self.signals.log_message.emit("ℹ️ Online mode: dùng nút Login ChatGPT để đăng nhập lần đầu.")
+                else:
+                    self._ensure_ollama_runtime(model_name=model_name, pull_model=True)
+                if fooocus_enabled:
+                    self._ensure_fooocus_api_ready(fooocus_url, fooocus_dir, fooocus_command)
+                self.signals.stage_update.emit("✅ Môi trường đã sẵn sàng")
+            except Exception as e:
+                self.signals.log_message.emit(f"❌ Chuẩn bị môi trường thất bại: {e}")
+                self.signals.stage_update.emit("❌ Cài môi trường lỗi")
+            finally:
+                self.signals.runtime_setup_button_update.emit(True, "Cài/kiểm tra môi trường")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _install_ollama_model(self):
+        model_name = self._selected_ollama_model_name()
+        self.signals.ollama_setup_button_update.emit(False, "Đang cài...")
+
+        def worker():
+            try:
+                self.signals.stage_update.emit("🧠 Cài Ollama/model...")
+                self._ensure_ollama_runtime(model_name=model_name, pull_model=True)
+                self.signals.log_message.emit("ℹ️ Bấm nút tải lại model để cập nhật danh sách.")
+                self.signals.stage_update.emit("✅ Ollama/model sẵn sàng")
+            except Exception as e:
+                self.signals.log_message.emit(f"❌ Cài Ollama/model thất bại: {e}")
+                self.signals.stage_update.emit("❌ Ollama/model lỗi")
+            finally:
+                self.signals.ollama_setup_button_update.emit(True, "Cài Ollama/model")
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def _load_ollama_models(self):
         """Gọi API Ollama cục bộ để lấy danh sách model."""
         self.model_combo.clear()
@@ -601,6 +799,7 @@ class MainWindow(QMainWindow):
             self.ollama_model_label,
             self.model_combo,
             self.btn_refresh_models,
+            self.btn_install_ollama,
             self.fooocus_url_label,
             self.fooocus_url_input,
             self.fooocus_dir_label,
@@ -655,14 +854,23 @@ class MainWindow(QMainWindow):
             self._append_log(f"🖼️ Đã chọn thư mục Fooocus API: {folder}")
 
     def _login_chatgpt(self):
-        try:
-            from module_ima2_runtime import run_chatgpt_login
+        self.btn_chatgpt_login.setEnabled(False)
+        self.btn_chatgpt_login.setText("Login...")
 
-            pid = run_chatgpt_login()
-            self._append_log(f"Opened ChatGPT/Codex login in a terminal (pid={pid}).")
-            self._append_log("After login completes, start ima2 or run the pipeline again.")
-        except Exception as e:
-            QMessageBox.warning(self, "ChatGPT login failed", f"Could not start login command:\n{e}")
+        def worker():
+            try:
+                from module_ima2_runtime import run_chatgpt_login
+
+                self._ensure_node_runtime(install=True)
+                pid = run_chatgpt_login()
+                self.signals.log_message.emit(f"Opened ChatGPT/Codex login in a terminal (pid={pid}).")
+                self.signals.log_message.emit("After login completes, start ima2 or run the pipeline again.")
+            except Exception as e:
+                self.signals.log_message.emit(f"ChatGPT login failed: {e}")
+            finally:
+                self.signals.chatgpt_login_button_update.emit(True, "Login ChatGPT")
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _start_ima2_server(self):
         api_url = self.ima2_url_input.text().strip() or "http://127.0.0.1:3333"
@@ -679,6 +887,7 @@ class MainWindow(QMainWindow):
                     self.signals.stage_update.emit("ima2-gen ready")
                     return
 
+                self._ensure_node_runtime(install=True)
                 launch_ima2_server()
                 if wait_for_ima2_server(api_url, timeout_sec=180):
                     self.signals.log_message.emit(f"ima2-gen is ready: {api_url}")
@@ -705,6 +914,7 @@ class MainWindow(QMainWindow):
             self.signals.log_message.emit(f"ima2-gen is ready: {api_url}")
             return
 
+        self._ensure_node_runtime(install=True)
         self.signals.log_message.emit("ima2-gen is not running. Starting npx --yes ima2-gen serve...")
         launch_ima2_server()
         if not wait_for_ima2_server(api_url, timeout_sec=180):
@@ -1306,6 +1516,18 @@ class MainWindow(QMainWindow):
     def _update_ima2_button(self, enabled: bool, text: str):
         self.btn_start_ima2.setEnabled(enabled)
         self.btn_start_ima2.setText(text)
+
+    def _update_runtime_setup_button(self, enabled: bool, text: str):
+        self.btn_prepare_runtime.setEnabled(enabled)
+        self.btn_prepare_runtime.setText(text)
+
+    def _update_ollama_setup_button(self, enabled: bool, text: str):
+        self.btn_install_ollama.setEnabled(enabled)
+        self.btn_install_ollama.setText(text)
+
+    def _update_chatgpt_login_button(self, enabled: bool, text: str):
+        self.btn_chatgpt_login.setEnabled(enabled)
+        self.btn_chatgpt_login.setText(text)
 
     def _on_finished(self, output_path: str):
         self.btn_start.setEnabled(True)

@@ -118,6 +118,8 @@ def check_node_version(min_major: int = 20) -> tuple[bool, str]:
             ["node", "--version"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=10,
         )
         version = (completed.stdout or completed.stderr or "").strip()
@@ -129,8 +131,18 @@ def check_node_version(min_major: int = 20) -> tuple[bool, str]:
 
 def check_npx_ima2() -> tuple[bool, str]:
     try:
-        command = ["npx", "--yes", "ima2-gen", "--help"]
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=45)
+        if os.name == "nt":
+            command = ["cmd", "/c", "npx", "--yes", "ima2-gen", "--help"]
+        else:
+            command = ["npx", "--yes", "ima2-gen", "--help"]
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=45,
+        )
         output = (completed.stdout or completed.stderr or "").strip()
         return completed.returncode == 0, output[:400]
     except Exception as exc:
