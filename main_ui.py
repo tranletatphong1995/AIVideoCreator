@@ -23,7 +23,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QComboBox, QTextEdit, QPushButton, QProgressBar,
     QGroupBox, QSplitter, QFileDialog, QMessageBox, QSpinBox,
-    QLineEdit, QCheckBox
+    QLineEdit, QCheckBox, QSizePolicy, QScrollArea
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QObject
 from PyQt5.QtGui import QFont, QIcon, QColor, QPalette
@@ -85,6 +85,7 @@ class MainWindow(QMainWindow):
         header = QLabel("🎬 AI Video Creator")
         header.setObjectName("header")
         header.setAlignment(Qt.AlignCenter)
+        header.setFixedHeight(44)
         main_layout.addWidget(header)
 
         # ── Splitter: trái (settings + input) | phải (log) ──
@@ -98,6 +99,7 @@ class MainWindow(QMainWindow):
         # ── Cài đặt mô hình ──
         settings_group = QGroupBox("⚙️ Cài đặt")
         settings_layout = QVBoxLayout()
+        settings_layout.setSpacing(8)
 
         ai_mode_row = QHBoxLayout()
         self.ai_mode_label = QLabel("Che do AI:")
@@ -106,7 +108,8 @@ class MainWindow(QMainWindow):
         self.ai_mode_combo.addItem("Local Ollama/Fooocus", "local")
         self.ai_mode_combo.addItem("Online ChatGPT/ima2-gen", "online")
         self.ai_mode_combo.setCurrentIndex(0)
-        ai_mode_row.addWidget(self.ai_mode_combo)
+        self.ai_mode_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        ai_mode_row.addWidget(self.ai_mode_combo, 1)
         settings_layout.addLayout(ai_mode_row)
 
         online_model_row = QHBoxLayout()
@@ -116,7 +119,8 @@ class MainWindow(QMainWindow):
         self.online_model_combo.addItem("gpt-5.4-mini", "gpt-5.4-mini")
         self.online_model_combo.addItem("gpt-5.4", "gpt-5.4")
         self.online_model_combo.addItem("gpt-5.5", "gpt-5.5")
-        online_model_row.addWidget(self.online_model_combo)
+        self.online_model_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        online_model_row.addWidget(self.online_model_combo, 1)
         settings_layout.addLayout(online_model_row)
 
         online_parallel_row = QHBoxLayout()
@@ -135,15 +139,16 @@ class MainWindow(QMainWindow):
         ima2_endpoint_row.addWidget(self.ima2_url_label)
         self.ima2_url_input = QLineEdit("http://127.0.0.1:3333")
         self.ima2_url_input.setToolTip("ima2-gen server. If port 3333 is busy, the app also reads ~/.ima2/server.json.")
-        ima2_endpoint_row.addWidget(self.ima2_url_input)
+        ima2_endpoint_row.addWidget(self.ima2_url_input, 1)
         self.btn_start_ima2 = QPushButton("Start ima2")
-        self.btn_start_ima2.setFixedWidth(90)
+        self.btn_start_ima2.setMinimumWidth(112)
         self.btn_start_ima2.clicked.connect(self._start_ima2_server)
         ima2_endpoint_row.addWidget(self.btn_start_ima2)
         settings_layout.addLayout(ima2_endpoint_row)
 
         chatgpt_login_row = QHBoxLayout()
         self.btn_chatgpt_login = QPushButton("Login ChatGPT")
+        self.btn_chatgpt_login.setMinimumWidth(128)
         self.btn_chatgpt_login.setToolTip("Run: npx --yes @openai/codex login")
         self.btn_chatgpt_login.clicked.connect(self._login_chatgpt)
         chatgpt_login_row.addWidget(self.btn_chatgpt_login)
@@ -157,9 +162,9 @@ class MainWindow(QMainWindow):
         self.model_combo = QComboBox()
         self.model_combo.setMinimumWidth(250)
         self.model_combo.setPlaceholderText("Đang tải danh sách mô hình...")
-        model_row.addWidget(self.model_combo)
+        model_row.addWidget(self.model_combo, 1)
         self.btn_refresh_models = QPushButton("🔄")
-        self.btn_refresh_models.setFixedWidth(40)
+        self.btn_refresh_models.setMinimumWidth(42)
         self.btn_refresh_models.setToolTip("Tải lại danh sách mô hình")
         self.btn_refresh_models.clicked.connect(self._load_ollama_models)
         model_row.addWidget(self.btn_refresh_models)
@@ -189,7 +194,8 @@ class MainWindow(QMainWindow):
         self.resolution_combo.addItem("2K QHD ngang 16:9 (2560×1440)", (2560, 1440))
         self.resolution_combo.addItem("4K UHD ngang 16:9 (3840×2160)", (3840, 2160))
         self.resolution_combo.setCurrentIndex(0)
-        res_row.addWidget(self.resolution_combo)
+        self.resolution_combo.setMinimumWidth(300)
+        res_row.addWidget(self.resolution_combo, 1)
         res_row.addStretch()
         settings_layout.addLayout(res_row)
 
@@ -203,7 +209,8 @@ class MainWindow(QMainWindow):
             "Fast dùng subtitle fallback, preview resolution thấp và encode veryfast. "
             "Final giữ chất lượng cao hơn."
         )
-        render_profile_row.addWidget(self.render_profile_combo)
+        self.render_profile_combo.setMinimumWidth(150)
+        render_profile_row.addWidget(self.render_profile_combo, 1)
         render_profile_row.addStretch()
         settings_layout.addLayout(render_profile_row)
 
@@ -224,7 +231,8 @@ class MainWindow(QMainWindow):
         self.style_combo.addItem("Thiên nhiên", "nature")
         self.style_combo.addItem("Lịch sử", "history")
         self.style_combo.setCurrentIndex(0)
-        style_row.addWidget(self.style_combo)
+        self.style_combo.setMinimumWidth(180)
+        style_row.addWidget(self.style_combo, 1)
         style_row.addStretch()
         settings_layout.addLayout(style_row)
 
@@ -239,7 +247,7 @@ class MainWindow(QMainWindow):
         fooocus_endpoint_row.addWidget(self.fooocus_url_label)
         self.fooocus_url_input = QLineEdit("http://127.0.0.1:8888")
         self.fooocus_url_input.setToolTip("Endpoint Fooocus/Fooocus-API đang chạy. Mặc định dùng /v1/generation/text-to-image")
-        fooocus_endpoint_row.addWidget(self.fooocus_url_input)
+        fooocus_endpoint_row.addWidget(self.fooocus_url_input, 1)
         settings_layout.addLayout(fooocus_endpoint_row)
 
         fooocus_dir_row = QHBoxLayout()
@@ -251,9 +259,9 @@ class MainWindow(QMainWindow):
             self.fooocus_dir_input.setText(default_fooocus_dir)
         else:
             self.fooocus_dir_input.setPlaceholderText("Chọn thư mục Fooocus-API hoặc Fooocus local")
-        fooocus_dir_row.addWidget(self.fooocus_dir_input)
+        fooocus_dir_row.addWidget(self.fooocus_dir_input, 1)
         self.btn_fooocus_dir = QPushButton("📁")
-        self.btn_fooocus_dir.setFixedWidth(42)
+        self.btn_fooocus_dir.setMinimumWidth(42)
         self.btn_fooocus_dir.setToolTip("Chọn thư mục chứa server Fooocus API")
         self.btn_fooocus_dir.clicked.connect(self._browse_fooocus_dir)
         fooocus_dir_row.addWidget(self.btn_fooocus_dir)
@@ -264,9 +272,9 @@ class MainWindow(QMainWindow):
         fooocus_cmd_row.addWidget(self.fooocus_cmd_label)
         self.fooocus_cmd_input = QLineEdit("start_fooocus_api.bat")
         self.fooocus_cmd_input.setToolTip("Lệnh chạy trong thư mục API. Có thể sửa theo repo Fooocus/Fooocus-API của bạn")
-        fooocus_cmd_row.addWidget(self.fooocus_cmd_input)
+        fooocus_cmd_row.addWidget(self.fooocus_cmd_input, 1)
         self.btn_start_fooocus_api = QPushButton("▶ API")
-        self.btn_start_fooocus_api.setFixedWidth(70)
+        self.btn_start_fooocus_api.setMinimumWidth(84)
         self.btn_start_fooocus_api.setToolTip("Khởi động Fooocus API và chờ endpoint sẵn sàng")
         self.btn_start_fooocus_api.clicked.connect(self._start_fooocus_api)
         fooocus_cmd_row.addWidget(self.btn_start_fooocus_api)
@@ -288,9 +296,9 @@ class MainWindow(QMainWindow):
         self.tts_mode_combo.addItem("🎯 Chuẩn (chất lượng cao)", "standard")
         self.tts_mode_combo.addItem("⚡ Nhanh (CPU)", "turbo")
         self.tts_mode_combo.setCurrentIndex(0)
-        tts_row.addWidget(self.tts_mode_combo)
+        tts_row.addWidget(self.tts_mode_combo, 1)
         self.btn_test_tts = QPushButton("Thử TTS")
-        self.btn_test_tts.setFixedWidth(90)
+        self.btn_test_tts.setMinimumWidth(96)
         self.btn_test_tts.setToolTip("Tạo thử một file audio ngắn trước khi chạy pipeline")
         self.btn_test_tts.clicked.connect(self._test_tts)
         tts_row.addWidget(self.btn_test_tts)
@@ -303,9 +311,9 @@ class MainWindow(QMainWindow):
         self.voice_combo = QComboBox()
         self.voice_combo.setMinimumWidth(250)
         self.voice_combo.addItem("(Giọng mặc định)", None)
-        voice_row.addWidget(self.voice_combo)
+        voice_row.addWidget(self.voice_combo, 1)
         self.btn_refresh_voices = QPushButton("🔄")
-        self.btn_refresh_voices.setFixedWidth(40)
+        self.btn_refresh_voices.setMinimumWidth(42)
         self.btn_refresh_voices.setToolTip("Tải danh sách giọng nói từ VieNeu")
         self.btn_refresh_voices.clicked.connect(self._load_voices)
         voice_row.addWidget(self.btn_refresh_voices)
@@ -317,13 +325,13 @@ class MainWindow(QMainWindow):
         self.music_path_input = QLineEdit()
         self.music_path_input.setPlaceholderText("Không có (tùy chọn)")
         self.music_path_input.setReadOnly(True)
-        music_row.addWidget(self.music_path_input)
-        btn_music = QPushButton("📁 Chọn")
-        btn_music.setFixedWidth(80)
+        music_row.addWidget(self.music_path_input, 1)
+        btn_music = QPushButton("Chọn")
+        btn_music.setMinimumWidth(74)
         btn_music.clicked.connect(self._browse_music)
         music_row.addWidget(btn_music)
-        btn_clear_music = QPushButton("❌")
-        btn_clear_music.setFixedWidth(40)
+        btn_clear_music = QPushButton("X")
+        btn_clear_music.setMinimumWidth(42)
         btn_clear_music.setToolTip("Xóa nhạc nền")
         btn_clear_music.clicked.connect(lambda: self.music_path_input.clear())
         music_row.addWidget(btn_clear_music)
@@ -346,9 +354,11 @@ class MainWindow(QMainWindow):
         output_row.addWidget(QLabel("Thư mục xuất:"))
         self.output_label = QLabel(os.path.join(os.getcwd(), "output"))
         self.output_label.setStyleSheet("color: #aaa; font-size: 11px;")
-        output_row.addWidget(self.output_label)
-        btn_browse = QPushButton("📁 Chọn")
-        btn_browse.setFixedWidth(80)
+        self.output_label.setMinimumWidth(0)
+        self.output_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        output_row.addWidget(self.output_label, 1)
+        btn_browse = QPushButton("Chọn")
+        btn_browse.setMinimumWidth(74)
         btn_browse.clicked.connect(self._browse_output)
         output_row.addWidget(btn_browse)
         settings_layout.addLayout(output_row)
@@ -394,7 +404,12 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.progress_bar)
 
         left_layout.addStretch()
-        splitter.addWidget(left_panel)
+
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setWidget(left_panel)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        splitter.addWidget(left_scroll)
 
         # === Panel phải: Log ===
         log_group = QGroupBox("📋 Nhật ký tiến trình")
@@ -413,7 +428,7 @@ class MainWindow(QMainWindow):
         splitter.addWidget(log_group)
 
         splitter.setSizes([450, 450])
-        main_layout.addWidget(splitter)
+        main_layout.addWidget(splitter, 1)
 
     # ──────────────────────────────────────
     # Stylesheet
@@ -429,14 +444,14 @@ class MainWindow(QMainWindow):
             font-size: 13px;
         }
         #header {
-            font-size: 28px;
+            font-size: 20px;
             font-weight: bold;
             color: #00d4ff;
-            padding: 10px;
+            padding: 6px 10px;
             background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                 stop:0 #0f3460, stop:1 #16213e);
-            border-radius: 10px;
-            margin-bottom: 5px;
+            border-radius: 8px;
+            margin-bottom: 0;
         }
         QGroupBox {
             border: 1px solid #333;
@@ -455,7 +470,8 @@ class MainWindow(QMainWindow):
             background-color: #0f3460;
             border: 1px solid #444;
             border-radius: 5px;
-            padding: 6px 10px;
+            min-height: 22px;
+            padding: 3px 8px;
             color: #fff;
         }
         QComboBox::drop-down {
@@ -481,8 +497,19 @@ class MainWindow(QMainWindow):
             background-color: #0f3460;
             border: 1px solid #444;
             border-radius: 6px;
-            padding: 8px 16px;
+            min-height: 22px;
+            padding: 4px 12px;
             color: #e0e0e0;
+        }
+        QCheckBox {
+            min-height: 22px;
+        }
+        QScrollArea {
+            border: none;
+            background-color: transparent;
+        }
+        QScrollArea > QWidget > QWidget {
+            background-color: transparent;
         }
         QPushButton:hover {
             background-color: #1a4a7a;
