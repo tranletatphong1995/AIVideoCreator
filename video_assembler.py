@@ -12,7 +12,9 @@ import shutil
 import sys
 from typing import List, Optional, Tuple
 
+import numpy as np
 from moviepy import (
+    VideoClip,
     VideoFileClip,
     AudioFileClip,
     ImageClip,
@@ -501,7 +503,7 @@ class VideoAssembler:
                 cue = cue.model_dump()
             cue_payload.append(cue)
         return {
-            "version": 1,
+            "version": 2,
             "image": stamp(image_path),
             "audio": stamp(audio_path),
             "resolution": list(resolution),
@@ -628,39 +630,41 @@ class VideoAssembler:
             slide_num = int(match.group(1))
 
         profiles = [
-            ((0.18, 0.16), (0.68, 0.28), 1.060),
-            ((0.78, 0.20), (0.30, 0.68), 1.065),
-            ((0.50, 0.14), (0.50, 0.72), 1.055),
-            ((0.24, 0.72), (0.74, 0.24), 1.065),
-            ((0.70, 0.66), (0.28, 0.30), 1.055),
+            (1.000, 1.035, (0.48, 0.50), (0.54, 0.47)),
+            (1.038, 1.005, (0.54, 0.48), (0.47, 0.53)),
+            (1.000, 1.028, (0.50, 0.53), (0.50, 0.47)),
+            (1.032, 1.004, (0.47, 0.48), (0.54, 0.52)),
+            (1.000, 1.030, (0.52, 0.47), (0.48, 0.53)),
         ]
-        start_anchor, end_anchor, scale = profiles[(slide_num - 1) % len(profiles)]
+        start_scale, end_scale, start_anchor, end_anchor = profiles[(slide_num - 1) % len(profiles)]
         duration = max(0.1, float(duration or 0.1))
-        target_width = self._even_int(width * scale)
-        target_height = self._even_int(height * scale)
+        source = Image.open(frame_path).convert("RGB")
+        source.load()
+        resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.BICUBIC)
 
         def progress(t):
             raw = min(1.0, max(0.0, float(t) / duration))
             return raw * raw * (3 - 2 * raw)
 
-        def position_at(t):
+        def make_frame(t):
             p = progress(t)
+            scale = start_scale + (end_scale - start_scale) * p
+            target_width = max(width, self._even_int(width * scale))
+            target_height = max(height, self._even_int(height * scale))
             extra_x = max(0.0, target_width - width)
             extra_y = max(0.0, target_height - height)
             anchor_x = start_anchor[0] + (end_anchor[0] - start_anchor[0]) * p
             anchor_y = start_anchor[1] + (end_anchor[1] - start_anchor[1]) * p
-            return (
-                -self._even_int(extra_x * anchor_x),
-                -self._even_int(extra_y * anchor_y),
-            )
+            left = min(max(0, self._even_int(extra_x * anchor_x)), max(0, target_width - width))
+            top = min(max(0, self._even_int(extra_y * anchor_y)), max(0, target_height - height))
+            resized = source.resize((target_width, target_height), resample)
+            frame = resized.crop((left, top, left + width, top + height))
+            return frame
 
-        return (
-            ImageClip(frame_path)
-            .with_duration(duration)
-            .with_fps(30)
-            .resized(new_size=(target_width, target_height))
-            .with_position(position_at)
-        )
+        return VideoClip(
+            frame_function=lambda t: np.array(make_frame(t)),
+            duration=duration,
+        ).with_fps(30)
 
     @staticmethod
     def _even_int(value: float) -> int:
