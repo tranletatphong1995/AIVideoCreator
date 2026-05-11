@@ -508,7 +508,7 @@ class VideoAssembler:
                 cue = cue.model_dump()
             cue_payload.append(cue)
         return {
-            "version": 5,
+            "version": 6,
             "image": stamp(image_path),
             "audio": stamp(audio_path),
             "resolution": list(resolution),
@@ -642,12 +642,12 @@ class VideoAssembler:
         # uses sub-pixel affine sampling so the drift does not snap between
         # integer crop offsets.
         profiles = [
-            (1.000, 1.026, (0.49, 0.50), (0.53, 0.48)),  # zoom in, drift up-right
-            (1.026, 1.004, (0.53, 0.49), (0.48, 0.52)),  # zoom out, drift down-left
-            (1.000, 1.022, (0.50, 0.52), (0.50, 0.48)),  # zoom in, drift upward
-            (1.024, 1.004, (0.48, 0.49), (0.53, 0.52)),  # zoom out, drift down-right
-            (1.000, 1.024, (0.52, 0.48), (0.48, 0.52)),  # zoom in, drift down-left
-            (1.022, 1.004, (0.49, 0.53), (0.52, 0.48)),  # zoom out, drift up-right
+            (1.000, 1.060, (0.49, 0.50), (0.53, 0.48)),  # zoom in, drift up-right
+            (1.060, 1.006, (0.53, 0.49), (0.48, 0.52)),  # zoom out, drift down-left
+            (1.000, 1.052, (0.50, 0.52), (0.50, 0.48)),  # zoom in, drift upward
+            (1.056, 1.006, (0.48, 0.49), (0.53, 0.52)),  # zoom out, drift down-right
+            (1.000, 1.056, (0.52, 0.48), (0.48, 0.52)),  # zoom in, drift down-left
+            (1.052, 1.006, (0.49, 0.53), (0.52, 0.48)),  # zoom out, drift up-right
         ]
         start_scale, end_scale, start_anchor, end_anchor = profiles[(slide_num - 1) % len(profiles)]
         duration = max(0.1, float(duration or 0.1))
