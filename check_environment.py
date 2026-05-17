@@ -1,6 +1,8 @@
 """Quick environment checker for AIVideoCreator."""
 
 import importlib
+import shutil
+import subprocess
 import sys
 
 
@@ -86,11 +88,40 @@ def check_ima2_optional() -> bool:
         return False
 
 
+def check_hyperframes_optional() -> bool:
+    node = shutil.which("node")
+    npx = shutil.which("npx")
+    if not node or not npx:
+        print("[WARN] HyperFrames: Node.js/npx not found")
+        print("       Fix: install Node.js LTS, or use the in-app setup button.")
+        return False
+    try:
+        completed = subprocess.run(
+            [npx, "--yes", "hyperframes@0.6.12", "render", "--help"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=120,
+        )
+        if completed.returncode == 0 and "hyperframes render v0.6.12" in (completed.stdout + completed.stderr):
+            print("[OK] HyperFrames 0.6.12 render CLI")
+            return True
+        print("[WARN] HyperFrames check failed")
+        print("       Fix: npx --yes hyperframes@0.6.12 render --help")
+        return False
+    except Exception as exc:
+        print(f"[WARN] HyperFrames check failed: {exc}")
+        print("       Fix: npx --yes hyperframes@0.6.12 render --help")
+        return False
+
+
 def main() -> int:
     imports_ok = check_imports()
     browser_ok = check_playwright_browser() if imports_ok else False
     check_ollama()
     check_ima2_optional()
+    check_hyperframes_optional()
 
     if imports_ok and browser_ok:
         print("\nEnvironment looks ready.")

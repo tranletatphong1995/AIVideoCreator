@@ -19,6 +19,7 @@ from moviepy import (
     AudioFileClip,
     ImageClip,
     concatenate_videoclips,
+    concatenate_audioclips,
     ColorClip,
     CompositeAudioClip,
     CompositeVideoClip,
@@ -205,6 +206,74 @@ class VideoAssembler:
 
         finally:
             for clip in [final_clip, color_clip, audio_clip]:
+                if clip:
+                    try:
+                        clip.close()
+                    except Exception:
+                        pass
+
+    def assemble_precomposed_video(
+        self,
+        video_path: str,
+        audio_files: List[str],
+        output_path: str,
+        bg_music_path: Optional[str] = None,
+        bg_music_volume: float = 0.2,
+        fast_mode: bool = False,
+    ) -> str:
+        """Attach the sequential narration track to a pre-rendered full video."""
+        self._log("🔧 Ghép video HyperFrames tổng với audio TTS...")
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+
+        video_clip = None
+        audio_clips = []
+        narration = None
+        final = None
+        try:
+            if not video_path or not os.path.exists(video_path):
+                raise RuntimeError(f"Không tìm thấy video HyperFrames: {video_path}")
+            video_clip = VideoFileClip(video_path)
+            for audio_path in audio_files:
+                if audio_path and os.path.exists(audio_path):
+                    audio_clips.append(AudioFileClip(audio_path))
+            if not audio_clips:
+                self._log("   ⚠️ Không có audio TTS, xuất video không tiếng.")
+                final = video_clip.without_audio()
+            else:
+                narration = concatenate_audioclips(audio_clips)
+                audio_duration = narration.duration
+                video_duration = video_clip.duration
+                self._log(f"   🎥 Video duration: {video_duration:.1f}s")
+                self._log(f"   🔊 TTS duration: {audio_duration:.1f}s")
+
+                if video_duration < audio_duration:
+                    self._log("   🔄 Video ngắn hơn audio, freeze frame cuối...")
+                    last_frame = video_clip.get_frame(max(0, video_duration - 0.05))
+                    freeze_clip = ImageClip(last_frame).with_duration(audio_duration - video_duration).with_fps(self._render_fps(fast_mode))
+                    video_clip = concatenate_videoclips([video_clip, freeze_clip], method="compose")
+                elif video_duration > audio_duration:
+                    self._log("   ✂️ Video dài hơn audio, cắt theo TTS...")
+                    video_clip = video_clip.subclipped(0, audio_duration)
+                final = video_clip.with_audio(narration)
+
+            if bg_music_path and os.path.exists(bg_music_path):
+                final = self._mix_background_music(final, bg_music_path, bg_music_volume)
+
+            final.write_videofile(
+                output_path,
+                codec="libx264",
+                audio_codec="aac",
+                fps=self._render_fps(fast_mode),
+                threads=4,
+                preset="veryfast" if fast_mode else "slow",
+                bitrate=self._bitrate_for_size(final.size, fast_mode=fast_mode),
+                ffmpeg_params=self._ffmpeg_quality_params(fast_mode=fast_mode),
+                logger=None,
+            )
+            self._log(f"🎉 Video hoàn chỉnh: {output_path}")
+            return output_path
+        finally:
+            for clip in [final, narration, video_clip] + audio_clips:
                 if clip:
                     try:
                         clip.close()
