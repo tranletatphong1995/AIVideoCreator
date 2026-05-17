@@ -6,7 +6,8 @@ PyQt desktop tool for creating narrated videos from an idea prompt.
 
 - Ollama brainstorms a structured video plan.
 - VieNeu TTS generates narration audio.
-- HTML mode renders static designed scenes through Playwright.
+- HTML mode creates a HyperFrames-style project and renders HTML/CSS timelines
+  through `npx --yes hyperframes@0.6.12 render`, with Playwright fallback.
 - Fooocus image-story mode generates illustration images through bundled Fooocus-API.
 - Ollama subtitle agent creates frame-timed subtitle cues.
 - Optional Online ChatGPT mode uses `ima2-gen` via `npx` for ChatGPT text tasks and GPT image generation.
@@ -28,7 +29,8 @@ the UI. On a clean Windows machine it will also try to install Python 3.11 with
 Inside the app, use the setup buttons before the first render:
 
 - `Cài/kiểm tra môi trường`: installs or verifies Python packages, Playwright,
-  VieNeu TTS, and the runtime needed by the selected AI mode.
+  VieNeu TTS, HyperFrames 0.6.12 for HTML/CSS timeline rendering, and the
+  runtime needed by the selected AI mode.
 - `Cài/Test TTS`: installs VieNeu if needed, downloads the first TTS assets, and
   writes a short test WAV file.
 - `Cài Ollama/model`: installs Ollama with `winget` when missing, starts the

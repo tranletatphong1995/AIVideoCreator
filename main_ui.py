@@ -10,6 +10,7 @@ import threading
 import json
 import subprocess
 import time
+import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
@@ -667,6 +668,18 @@ class MainWindow(QMainWindow):
         self.signals.log_message.emit(f"✅ Node.js sẵn sàng: {msg}")
         return True
 
+    def _ensure_hyperframes_runtime(self):
+        self._ensure_node_runtime(install=True)
+        npx_path = shutil.which("npx")
+        if not npx_path:
+            raise RuntimeError("Không tìm thấy npx sau khi kiểm tra Node.js. Hãy đóng app/mở lại run.bat.")
+        self._run_setup_command(
+            [npx_path, "--yes", "hyperframes@0.6.12", "render", "--help"],
+            "Kiểm tra/cài HyperFrames 0.6.12",
+            timeout_sec=600,
+        )
+        self.signals.log_message.emit("✅ HyperFrames 0.6.12 sẵn sàng cho HTML/CSS timeline")
+
     def _is_ollama_command_ready(self) -> bool:
         try:
             subprocess.run(["ollama", "--version"], capture_output=True, text=True, timeout=15, check=True)
@@ -728,6 +741,8 @@ class MainWindow(QMainWindow):
                 self.signals.stage_update.emit("🧰 Chuẩn bị môi trường...")
                 self._prepare_python_runtime()
                 self._prepare_tts_runtime(tts_mode, voice_id=voice_id)
+                if not fooocus_enabled:
+                    self._ensure_hyperframes_runtime()
                 if online:
                     self._ensure_node_runtime(install=True)
                     self.signals.log_message.emit("ℹ️ Online mode: dùng nút Login ChatGPT để đăng nhập lần đầu.")
@@ -1293,7 +1308,7 @@ class MainWindow(QMainWindow):
             original_resolution = resolution
             resolution = self._fast_preview_resolution(resolution) if fast_mode else resolution
             width, height = resolution
-            render_mode = "Fooocus image story" if fooocus_enabled else "HTML static slides"
+            render_mode = "Fooocus image story" if fooocus_enabled else "HTML/CSS timeline"
             profile_label = "Fast preview" if fast_mode else "Final quality"
             self.signals.log_message.emit(f"⚙️ Cấu hình: {width}x{height}, Profile={profile_label}, Chế độ={render_mode}, Phong cách={style_preset}, Ngôn ngữ={output_language}, TTS={tts_mode}, Nhạc={'Có' if music_path else 'Không'}")
             if fast_mode and resolution != original_resolution:
@@ -1307,7 +1322,7 @@ class MainWindow(QMainWindow):
             else:
                 text_provider = LocalOllamaTextProvider(model_name)
             image_engine = "ima2-gen" if online_mode else "Fooocus"
-            render_mode = f"{image_engine} image story" if fooocus_enabled else "HTML static slides"
+            render_mode = f"{image_engine} image story" if fooocus_enabled else "HTML/CSS timeline"
             self.signals.log_message.emit(f"AI mode={ai_mode}, model={model_name}, render={render_mode}")
             if resume_enabled:
                 self.signals.log_message.emit("🔁 Resume đang bật: dùng lại file tạm hợp lệ nếu có.")
@@ -1437,8 +1452,8 @@ class MainWindow(QMainWindow):
                 self.signals.finished.emit(output_path)
                 return
 
-            # ── Giai đoạn 2: Viết HTML/CSS ──
-            self.signals.stage_update.emit("💻 Giai đoạn 2/5: Viết HTML/CSS cho các cảnh...")
+            # ── Giai đoạn 2: AI code HTML/CSS timeline, renderer kiểm khung ──
+            self.signals.stage_update.emit("💻 Giai đoạn 2/5: AI code HTML/CSS timeline...")
             audio_agent = AudioAgent(self.signals, mode=tts_mode)
             narrations = [slide.narration for slide in plan.slides]
             audio_executor = ThreadPoolExecutor(max_workers=1)
@@ -1478,12 +1493,28 @@ class MainWindow(QMainWindow):
             assembler = VideoAssembler(self.signals)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             output_path = os.path.join(output_dir, f"video_{timestamp}.mp4")
-            assembler.assemble(
-                video_clips, audio_files, output_path,
-                bg_music_path=music_path,
-                bg_music_volume=music_volume,
-                fast_mode=fast_mode,
+            html_reels_dir = os.path.abspath(getattr(video_agent, "HTML_REELS_DIR", ""))
+            precomposed_html_video = (
+                len(video_clips) == 1
+                and html_reels_dir
+                and os.path.abspath(video_clips[0]).startswith(html_reels_dir)
             )
+            if precomposed_html_video:
+                assembler.assemble_precomposed_video(
+                    video_clips[0],
+                    audio_files,
+                    output_path,
+                    bg_music_path=music_path,
+                    bg_music_volume=music_volume,
+                    fast_mode=fast_mode,
+                )
+            else:
+                assembler.assemble(
+                    video_clips, audio_files, output_path,
+                    bg_music_path=music_path,
+                    bg_music_volume=music_volume,
+                    fast_mode=fast_mode,
+                )
             self.signals.progress_update.emit(100)
 
             self.signals.finished.emit(output_path)
