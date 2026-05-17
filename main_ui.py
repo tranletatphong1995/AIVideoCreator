@@ -895,21 +895,27 @@ class MainWindow(QMainWindow):
 
         def worker():
             try:
-                from module_ima2_runtime import is_ima2_server_ready, launch_ima2_server, wait_for_ima2_server
+                from module_ima2_runtime import (
+                    is_ima2_oauth_ready,
+                    is_ima2_server_ready,
+                    launch_ima2_server,
+                    wait_for_ima2_oauth,
+                    wait_for_ima2_server,
+                )
 
-                if is_ima2_server_ready(api_url):
+                if is_ima2_server_ready(api_url) and is_ima2_oauth_ready(api_url):
                     self.signals.log_message.emit(f"ima2-gen is already ready: {api_url}")
                     self.signals.stage_update.emit("ima2-gen ready")
                     return
 
                 self._ensure_node_runtime(install=True)
                 launch_ima2_server()
-                if wait_for_ima2_server(api_url, timeout_sec=180):
+                if wait_for_ima2_server(api_url, timeout_sec=180) and wait_for_ima2_oauth(api_url, timeout_sec=90):
                     self.signals.log_message.emit(f"ima2-gen is ready: {api_url}")
                     self.signals.stage_update.emit("ima2-gen ready")
                 else:
                     self.signals.log_message.emit(
-                        "ima2-gen was started, but the app could not connect yet. "
+                        "ima2-gen was started, but the app could not connect to backend/OAuth yet. "
                         "Check the ima2 terminal or ~/.ima2/server.json for the actual port."
                     )
                     self.signals.stage_update.emit("ima2-gen not reachable")
@@ -922,17 +928,23 @@ class MainWindow(QMainWindow):
         threading.Thread(target=worker, daemon=True).start()
 
     def _ensure_ima2_ready(self, api_url: str):
-        from module_ima2_runtime import is_ima2_server_ready, launch_ima2_server, wait_for_ima2_server
+        from module_ima2_runtime import (
+            is_ima2_oauth_ready,
+            is_ima2_server_ready,
+            launch_ima2_server,
+            wait_for_ima2_oauth,
+            wait_for_ima2_server,
+        )
 
         api_url = (api_url or "http://127.0.0.1:3333").strip()
-        if is_ima2_server_ready(api_url):
+        if is_ima2_server_ready(api_url) and is_ima2_oauth_ready(api_url):
             self.signals.log_message.emit(f"ima2-gen is ready: {api_url}")
             return
 
         self._ensure_node_runtime(install=True)
         self.signals.log_message.emit("ima2-gen is not running. Starting npx --yes ima2-gen serve...")
         launch_ima2_server()
-        if not wait_for_ima2_server(api_url, timeout_sec=180):
+        if not wait_for_ima2_server(api_url, timeout_sec=180) or not wait_for_ima2_oauth(api_url, timeout_sec=90):
             raise RuntimeError(
                 "ima2-gen did not become reachable. Check the ima2 terminal, then run "
                 "`npx @openai/codex login` if OAuth is missing or expired."

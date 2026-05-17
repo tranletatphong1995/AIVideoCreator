@@ -74,10 +74,28 @@ def is_ima2_server_ready(server_url: str = "") -> bool:
         return False
 
 
+def is_ima2_oauth_ready(server_url: str = "") -> bool:
+    oauth_url = resolve_ima2_oauth_url(server_url)
+    try:
+        response = requests.get(f"{oauth_url}/v1/models", timeout=3)
+        return response.status_code < 500
+    except Exception:
+        return False
+
+
 def wait_for_ima2_server(server_url: str = "", timeout_sec: int = 120) -> bool:
     deadline = time.time() + timeout_sec
     while time.time() < deadline:
         if is_ima2_server_ready(server_url):
+            return True
+        time.sleep(2)
+    return False
+
+
+def wait_for_ima2_oauth(server_url: str = "", timeout_sec: int = 120) -> bool:
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        if is_ima2_oauth_ready(server_url):
             return True
         time.sleep(2)
     return False

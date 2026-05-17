@@ -59,7 +59,7 @@ class VideoAgent:
     PREVIEW_DIR = os.path.join(TEMP_DIR, "previews")
     HTML_REELS_DIR = os.path.join(TEMP_DIR, "html_reels_project")
     HTML_CACHE_VERSION = 8
-    RENDER_CACHE_VERSION = 9
+    RENDER_CACHE_VERSION = 10
     STATIC_FRAME_SCALE = 2
     ANIMATED_FRAME_SCALE = 1
     HTML_VIDEO_FPS = 12
@@ -1857,7 +1857,7 @@ QUY TẮC NGÔN NGỮ:
 
 YÊU CẦU CỰC KỲ QUAN TRỌNG:
 1. Code một composition HTML/CSS/JS giống repo video-reels-agent: root có `data-composition-id="slide-{slide.slide_number}"`, `data-width="{self.width}"`, `data-height="{self.height}"`, `data-duration="{max(1, int(getattr(slide, "duration_seconds", 8) or 8))}"`.
-2. Các phần tử xuất hiện theo thời gian dùng class `clip` và metadata `data-start`, `data-duration`, `data-track-index`. Dùng track rõ ràng, ví dụ visual=1, label=2, title=3, detail=4.
+2. Các phần tử xuất hiện theo thời gian dùng class `clip` và metadata `data-start`, `data-duration`, `data-track-index`. Dùng track rõ ràng, ví dụ visual=1, label=2, title=3, detail=4. Trên cùng một track, tuyệt đối không để clip overlap: `data-start` của clip sau phải >= `data-start + data-duration` của clip trước, hoặc chuyển sang track khác.
 3. Được dùng GSAP qua CDN `https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js` và phải đăng ký timeline paused: `window.__timelines = window.__timelines || {{}}; window.__timelines["slide-{slide.slide_number}"] = tl;`.
 4. Tạo motion thật sự: entrance, subtle pulse, sweep, counter giả lập, chart reveal, connector draw, crossfade nhỏ. Không dùng `repeat: -1`; nếu lặp thì dùng số hữu hạn theo duration.
 5. BẮT BUỘC mọi nội dung nằm trong canvas {self.width}x{self.height}px. Tuyệt đối KHÔNG dùng scroll dưới bất kỳ dạng nào. Nếu nội dung dài, giảm chữ, giảm font, chia ít khối hơn hoặc ưu tiên visual.
@@ -1865,7 +1865,9 @@ YÊU CẦU CỰC KỲ QUAN TRỌNG:
 7. KHÔNG chép nguyên văn phần "Ý tưởng" / prompt / mô tả thiết kế vào video. Chỉ hiển thị chữ thật sự cần cho người xem.
 8. Không hiển thị số cảnh, số slide, "Slide 01", "Cảnh 1", thời lượng, progress dots, hoặc dấu hiệu debug/template.
 9. Không dùng external image, Google Fonts, audio, video. Chỉ HTML/CSS/SVG inline và GSAP CDN. Text dùng Segoe UI / Arial / Noto Sans, letter-spacing 0, không tràn/đè nhau.
-10. Trả về DUY NHẤT code HTML, không giải thích, không markdown.
+10. Mỗi phần tử timeline-visible cần có `id` ổn định, dễ đọc, ví dụ `id="scene-{slide.slide_number}-title"` hoặc `id="scene-{slide.slide_number}-metric-1"`.
+11. Giữ file gọn để HyperFrames strict lint chạy được: tối đa 260 dòng, tối đa 4 phần tử có data-start trên mỗi `data-track-index`; nếu cần nhiều chi tiết, gộp visual/text thành ít block hơn.
+12. Trả về DUY NHẤT code HTML, không giải thích, không markdown.
 """
 
         try:
@@ -2295,7 +2297,7 @@ YÊU CẦU CỰC KỲ QUAN TRỌNG:
         fps = 30
         project_dir = os.path.abspath(self.HTML_REELS_DIR)
         render_output = os.path.abspath(output_path)
-        cmd = [
+        base_cmd = [
             npx_path,
             "--yes",
             "hyperframes@0.6.12",
@@ -2307,8 +2309,8 @@ YÊU CẦU CỰC KỲ QUAN TRỌNG:
             str(fps),
             "--quality",
             quality,
-            "--strict",
         ]
+        cmd = base_cmd + ["--strict"]
         self._log(f"🎬 Render HyperFrames project: {index_path}")
         try:
             result = subprocess.run(
@@ -2325,7 +2327,8 @@ YÊU CẦU CỰC KỲ QUAN TRỌNG:
             return None
 
         if result.returncode != 0:
-            tail = (result.stderr or result.stdout or "").strip().splitlines()[-8:]
+            render_log = (result.stderr or result.stdout or "").strip()
+            tail = render_log.splitlines()[-8:]
             if tail:
                 self._log("   ⚠️ HyperFrames render lỗi:\n" + "\n".join(tail))
             self._log("   ↪️ Fallback sang Playwright renderer.")
